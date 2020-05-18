@@ -13,14 +13,6 @@ took 30 minutes but it's looks like we're good to go!
 
 checking checksums:
 
-```bash
-# in data/fastq folder
-find . -name '*fq.gz' > fastq_names.txt
-touch checksums.txt
-```
-
-and then some python:
-
 ```python
 import subprocess
 from tqdm import tqdm
