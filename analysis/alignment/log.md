@@ -738,10 +738,7 @@ time while read sample; do
         -I data/alignments/bam/${sample}_5.bam \
         -glm BOTH \
         -ploidy 2 \
-        -gt_mode DISCOVERY \
-        --output_mode EMIT_ALL_CONFIDENT_SITES \ # equivalent to EMIT_ALL_SITES
-        -stand_emit_conf 0.0 \
-        -stand_call_conf 0.0 \
+        --output_mode EMIT_ALL_SITES \ 
         --heterozygosity 0.02 \
         --indel_heterozygosity 0.002 \
         -o data/alignments/genotyping/UG/${sample}_samples.vcf;
@@ -750,6 +747,62 @@ done < data/alignments/fastq/symlinks/samples.txt
 ```
 
 (will have to handle SL26 differently since there's only one sample there)
+
+## 21/6/2020
+
+whole thing took just under a day - 3 hrs/run
+
+queuing up the DL files:
+
+```bash
+time while read sample; do
+    if [[ ${sample} =~ "DL" ]]; then
+        time java -jar ./bin/GenomeAnalysisTK.jar \
+        -T UnifiedGenotyper \
+        -R data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+        -I data/alignments/bam/${sample}_0.bam \
+        -I data/alignments/bam/${sample}_5.bam \
+        -glm BOTH \
+        -ploidy 2 \
+        --output_mode EMIT_ALL_SITES \ 
+        --heterozygosity 0.02 \
+        --indel_heterozygosity 0.002 \
+        -o data/alignments/genotyping/UG/${sample}_samples.vcf;
+    fi;
+done < data/alignments/fastq/symlinks/samples.txt
+```
+
+while this runs, let's test `CombineVariants`:
+
+```bash
+time java -jar ./bin/GenomeAnalysisTK.jar \
+-T CombineVariants \
+-R data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+--variant data/alignments/genotyping/UG/CC1373_samples.vcf \
+--variant data/alignments/genotyping/UG/CC1952_samples.vcf \
+-L chromosome_1 \
+-o test_combine.vcf \
+-genotypeMergeOptions UNSORTED
+```
+
+this works well - the merge setting could also be UNIQUIFY if there are sample
+name issues, but there aren't any right now, so UNSORTED works fine for now
+
+trying this with one of the older VCFs 
+
+```bash
+time java -jar ./bin/GenomeAnalysisTK.jar \
+-T CombineVariants \
+-R data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+--variant ../alignments/genotyping/unified_genotyper/UG_diploid/salt/salt_aligned_salt_UG.diploid.vcf.gz \
+--variant data/alignments/genotyping/UG/CC1373_samples.vcf \
+--variant data/alignments/genotyping/UG/CC1952_samples.vcf \
+-L chromosome_1 \
+-o test_combine_salt.vcf \
+-genotypeMergeOptions UNSORTED
+```
+
+works great! will be revisiting this once all the pairs have been called. 
 
 
 
