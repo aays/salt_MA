@@ -804,6 +804,203 @@ time java -jar ./bin/GenomeAnalysisTK.jar \
 
 works great! will be revisiting this once all the pairs have been called. 
 
+## 22/6/2020
+
+today: UG for SL lines, and getting HC queued up
+
+given that there are 2 (well, 2 and a half) pairs here, I should just type these up manually
+
+```bash
+time for i in 27 29; do
+    time java -jar ./bin/GenomeAnalysisTK.jar \
+    -T UnifiedGenotyper \
+    -R data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+    -I data/alignments/bam/SL${i}_0.bam \
+    -I data/alignments/bam/SL${i}_5.bam \
+    -glm BOTH \
+    -ploidy 2 \
+    --output_mode EMIT_ALL_SITES \ 
+    --heterozygosity 0.02 \
+    --indel_heterozygosity 0.002 \
+    -o data/alignments/genotyping/UG/SL${i}_samples.vcf;
+done
+
+time java -jar ./bin/GenomeAnalysisTK.jar \
+-T UnifiedGenotyper \
+-R data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+-I data/alignments/bam/SL26_5.bam \
+-glm BOTH \
+-ploidy 2 \
+--output_mode EMIT_ALL_SITES \ 
+--heterozygosity 0.02 \
+--indel_heterozygosity 0.002 \
+-o data/alignments/genotyping/UG/SL26_samples.vcf
+```
+
+## 23/6/2020
+
+today: 
+
+- bgzip yesterday's VCFs
+- queue up HC commands for pairs
+- combine UG calls with earlier files
+
+bgzipping:
+
+```bash
+time for fname in data/alignments/genotyping/UG/*vcf; do
+    time bgzip ${fname}
+    echo "done ${fname}"
+done
+```
+
+getting HC command from previous runs:
+
+```bash
+# in parent project dir
+zgrep -m 1 'GATKCommandLine' alignments/genotyping/HC_diploid/all_SL_HC/allSL.diploid.HC.variants.vcf.gz
+```
+
+output - copying over in tmux and then using `s/ /\r/g` 
+
+```
+##GATKCommandLine.HaplotypeCaller=<ID=HaplotypeCaller,CommandLineOptions="analysis_type=HaplotypeCaller
+input_file=[S21/RG.bam, S23/RG.bam, S24/RG.bam, S25/RG.bam,
+S26/RG.bam, S27/RG.bam, S29/RG.bam, S30/RG.bam, S31/RG.bam, S33/RG.bam]
+showFullBamList=false
+read_buffer_size=null
+phone_home=AWS
+gatk_key=null
+intervals=[/scratch/research/references/chlamydomonas/5.3_chlamy_w_organelles_mt_minus/interval_list/10.interval_list]
+excludeIntervals=null
+interval_set_rule=UNION
+interval_merging=ALL
+interval_padding=0
+reference_sequence=/scratch/research/references/chlamydomonas/5.3_chlamy_w_organelles_mt_minus/chlamy.5.3.w_organelles_mtMinus.fasta
+downsampling_type=BY_SAMPLE
+downsample_to_fraction=null
+downsample_to_coverage=500
+fix_misencoded_quality_scores=false
+allow_potentially_misencoded_quality_scores=false
+useOriginalQualities=false
+defaultBaseQualities=-1
+performanceLog=null
+disable_indel_quals=false
+emit_original_quals=false
+validation_strictness=SILENT
+sites_only=false
+never_trim_vcf_format_field=false
+bcf=false
+bam_compression=null
+simplifyBAM=false
+disable_bam_indexing=false
+generate_md5=false
+pedigreeValidationType=STRICT
+allow_intervals_with_unindexed_bam=false
+generateShadowBCF=false
+variant_index_type=DYNAMIC_SEEK
+variant_index_parameter=-1
+reference_window_stop=0
+logging_level=INFO
+log_to_file=null
+help=false
+version=false
+out=/scratch/research/projects/chlamydomonas/salt_lines/alignments/./all_SL_HC/allSL.10.diploid.HC.variants.vcf
+likelihoodCalculationEngine=PairHMM
+heterogeneousKmerSizeResolution=COMBO_MIN
+dontTrimActiveRegions=false
+maxDiscARExtension=25
+maxGGAARExtension=300
+paddingAroundIndels=150
+paddingAroundSNPs=20
+emitRefConfidence=NONE
+bamWriterType=CALLED_HAPLOTYPES
+disableOptimizations=false
+annotateNDA=false
+heterozygosity=0.02
+indel_heterozygosity=0.002
+standard_min_confidence_threshold_for_calling=0.0
+standard_min_confidence_threshold_for_emitting=0.0
+max_alternate_alleles=6
+input_prior=[]
+sample_ploidy=2
+genotyping_mode=DISCOVERY
+contamination_fraction_to_filter=0.0
+contamination_fraction_per_sample_file=null
+exactcallslog=null
+output_mode=EMIT_VARIANTS_ONLY ### variants only! 
+allSitePLs=false
+gcpHMM=10
+pair_hmm_implementation=VECTOR_LOGLESS_CACHING
+pair_hmm_sub_implementation=ENABLE_ALL
+always_load_vector_logless_PairHMM_lib=false
+phredScaledGlobalReadMismappingRate=45
+GVCFGQBands=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+21, 22, 23, 24, 25, 26, 27, 28, 29, 30,
+31, 32, 33, 34, 35, 36, 37, 38, 39, 40,
+41, 42, 43, 44, 45, 46, 47, 48, 49, 50,
+51, 52, 53, 54, 55, 56, 57, 58, 59, 60,
+70, 80, 90, 99]
+errorCorrectReads=false
+pcr_indel_model=CONSERVATIVE
+maxReadsInRegionPerSample=10000
+minReadsPerAlignmentStart=10
+maxProbPropagationDistance=50
+activeProbabilityThreshold=0.002
+min_mapping_quality_score=20
+filter_reads_with_N_cigar=false
+filter_mismatching_base_and_quals=false
+filter_bases_not_stored=false"
+Date="Sat Oct 01 07:00:08 EDT 2016",Epoch=1475319608804,Version=3.5-0-g36282e4>
+```
+
+getting started with CC samples:
+
+```bash
+time while read sample; do
+    if [[ ${sample} =~ "CC" ]]; then
+        time java -jar ./bin/GenomeAnalysisTK.jar \
+        -T HaplotypeCaller \
+        -R data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+        -I data/alignments/bam/${sample}_0.bam \
+        -I data/alignments/bam/${sample}_5.bam \
+        -ploidy 2 \
+        --output_mode EMIT_VARIANTS_ONLY \ 
+        --heterozygosity 0.02 \
+        --indel_heterozygosity 0.002 \
+        -o data/alignments/genotyping/HC/${sample}_samples.vcf;
+    fi;
+done < data/alignments/fastq/symlinks/samples.txt
+```
+
+while this runs, can get started on using CombineVariants. the SL
+lines make sense as first pass candidates - these should include the
+dark ancestors, CC2935 (diploid), the previous SL lines, and finally the pairs
+
+will need to tabix and bgzip the files in `data/alignments/genotyping/UG` for compatibility
+with CombineVariants
+
+```bash
+mkdir -p data/alignments/genotyping/UG/pairs
+mkdir -p data/alignments/genotyping/UG/combined
+mv -v data/alignments/genotyping/UG/*vcf* data/alignments/genotyping/UG/pairs
+
+# doing all sequentially - no reason to split these up
+time while read sample; do
+    time java -jar ./bin/GenomeAnalysisTK.jar \
+    -T CombineVariants \
+    -R data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+    --variant ../alignments/genotyping/unified_genotyper/UG_diploid/dark_ancestors/dark_aligned_dark_UG_diploid.vcf.gz \
+    --variant ../alignments/genotyping/unified_genotyper/UG_diploid/salt/salt_aligned_salt_UG.diploid.vcf.gz \
+    --variant ../alignments/genotyping/unified_genotyper/UG_diploid/CC2935_diploid.UG.vcf.gz \
+    --variant data/alignments/genotyping/UG/pairs/${sample}_samples.vcf.gz \
+    -o data/alignments/genotyping/UG/combined/${sample}_combined.vcf \
+    -genotypeMergeOptions UNSORTED;
+done < data/alignments/fastq/symlinks/samples.txt
+```
+
+
 
 
 
