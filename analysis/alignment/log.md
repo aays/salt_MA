@@ -1000,8 +1000,518 @@ time while read sample; do
 done < data/alignments/fastq/symlinks/samples.txt
 ```
 
+## 25/6/2020
 
+today:
 
+- cancel HC and modify:
+    - emit all sites
+    - use interval files to parallelize over chromosomes
+    - also include scaffolds + organelles as intervals in separate file
+- do first pass mutation calling check in UG files using cyvcf2
+    - diff b/w 0 and 5 lines, GQ > 30, homozygous calls
+
+combining UG files is done, took a full day (~90 min per VCF)
+
+new HC code - going to make a temp script for this (`HC_temp.sh`) - will
+start with CC samples
+
+```bash
+chr=$1
+time while read sample; do
+    if [[ ${sample} =~ "CC" ]]; then
+        time java -jar ./bin/GenomeAnalysisTK.jar \
+        -T HaplotypeCaller \
+        -R data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+        -I data/alignments/bam/${sample}_0.bam \
+        -I data/alignments/bam/${sample}_5.bam \
+        -L chromosome_${chr}
+        -ploidy 2 \
+        --output_mode EMIT_ALL_ACTIVE_SITES \ 
+        --heterozygosity 0.02 \
+        --indel_heterozygosity 0.002 \
+        -o data/alignments/genotyping/HC/${sample}_samples.vcf;
+    fi;
+done < data/alignments/fastq/symlinks/samples.txt
+```
+
+running this in parallel - just the first five chrs, as a test:
+
+```bash
+parallel -j 5 -i sh -c 'time bash HC_temp.sh {}' -- {1..5}
+```
+
+## 26/6/2020
+
+queuing up remaining chrs:
+
+```bash
+parallel -j 2 -i sh -c 'time bash HC_temp.sh {}' -- 6 7
+```
+
+while this is happening, going to:
+
+- bgzip and tabix the UG combined files 
+- do a first pass check for muts that differ between 0 and 5 in the UG files
+
+```bash
+time for fname in data/alignments/genotyping/UG/combined/*vcf; do
+    time bgzip ${fname}
+    tabix -p vcf ${fname}.gz
+    echo "done ${fname}"
+done
+```
+
+meanwhile, working off the pairs file to look for some variants:
+
+```python
+>>> from cyvcf2 import VCF
+>>> fname = 'CC1373_samples.vcf.gz'
+>>> v = VCF(fname)
+>>> snps = []
+>>> v = VCF(fname)
+>>> snps = []
+>>> for rec in tqdm(v):
+  2     if len(rec.ALT) > 0 and rec.num_het == 0 and not rec.is_indel:
+  3         if rec.genotypes[0] != rec.genotypes[1]:
+  4             if not any([-1 in call for call in rec.genotypes]):
+  5                 if all(rec.gt_quals > 30):
+  6                     snps.append(rec)
+  7                     print('found', rec)
+  8     if len(snps) == 10:
+  9         break
+>>> snps
+[Variant(chromosome_2:6902447 G/A), Variant(chromosome_7:5244681 C/A), Variant(chromosome_12:6997391 G/T), 
+Variant(chromosome_17:4899631 G/C), Variant(mtDNA:573 T/C), Variant(mtDNA:3693 T/G)]
+```
+
+oh shit! those are some solid first pass SNPs - let's do the same for CC1952:
+
+```bash
+>>> fname = 'CC1952_samples.vcf.gz'
+>>> snps_1952 = []
+>>> v = VCF(fname)
+  2 for rec in tqdm(v):
+  3     if len(rec.ALT) > 0 and rec.num_het == 0 and not rec.is_indel:
+  4         if rec.genotypes[0] != rec.genotypes[1]:
+  5             if not any([-1 in call for call in rec.genotypes]):
+  6                 if all(rec.gt_quals > 30):
+  7                     snps_1952.append(rec)
+  8                     print('found', rec)
+  9     if len(snps_1952) == 10:
+ 10         break
+found chromosome_12    343437  .       C       T       418.61  .       AC=2;AF=0.5;AN=4;BaseQRankSum=0.423;DP=28;Dels=0;ExcessHet=0.7918;FS=3.556;HaplotypeScore=0;MLEAC=2;MLEAF=0.5;MQ=60;MQ0=0;MQRankSum=0.047;QD=28.1;ReadPosRankSum=-1.035;SOR=0.531     GT:AD:DP:GQ:PL  1/1:0,11:11:33:440,33,0 0/0:17,0:17:51:0,51,670
+```
+
+just the one this time - moving on to the next (2342)
+
+```bash
+>>> snps_2342 = [] # I should have used a dict, lol
+>>> fname = 'CC2342_samples.vcf.gz'
+>>> v = VCF(fname)
+>>> v = VCF(fname)
+  2 for rec in tqdm(v):
+  3     if len(rec.ALT) > 0 and rec.num_het == 0 and not rec.is_indel:
+  4         if rec.genotypes[0] != rec.genotypes[1]:
+  5             if not any([-1 in call for call in rec.genotypes]):
+  6                 if all(rec.gt_quals > 30):
+  7                     snps_2342.append(rec)
+  8                     print('found', rec)
+  9     if len(snps_2342) == 10:
+ 10         break
+found chromosome_1       509598  .       C       T       568.61  .       AC=2;AF=0.5;AN=4;BaseQRankSum=0.37;DP=27;Dels=0;ExcessHet=0.7918;FS=1.657;HaplotypeScore=0;MLEAC=2;MLEAF=0.5;MQ=60;MQ0=0;MQRankSum=0.025;QD=25.19;ReadPosRankSum=-0.666;SOR=0.269     GT:AD:DP:GQ:PL  0/0:11,0:11:33:0,33,440 1/1:0,16:16:45:590,45,0
+
+found chromosome_7     667812  .       C       T       532.61  .       AC=2;AF=0.5;AN=4;BaseQRankSum=-0.487;DP=28;Dels=0;ExcessHet=0.7918;FS=1.606;HaplotypeScore=0;MLEAC=2;MLEAF=0.5;MQ=59.31;MQ0=0;MQRankSum=-1.416;QD=33.29;ReadPosRankSum=0.627;SOR=1.127        GT:AD:DP:GQ:PL  0/0:12,0:12:36:0,36,480 1/1:0,16:16:42:554,42,0
+
+found chromosome_11    83491   .       A       C       703.6   .       AC=2;AF=0.5;AN=4;BaseQRankSum=-0.48;DP=35;Dels=0;ExcessHet=0.7918;FS=8.193;HaplotypeScore=0;MLEAC=2;MLEAF=0.5;MQ=60;MQ0=0;MQRankSum=-0.414;QD=26.32;ReadPosRankSum=-0.381;SOR=0.094   GT:AD:DP:GQ:PL  0/0:16,0:16:48:0,48,640 1/1:0,19:19:54:725,54,0
+
+found chromosome_11    1661849 .       G       A       408.61  .       AC=2;AF=0.5;AN=4;BaseQRankSum=0.406;DP=24;Dels=0;ExcessHet=0.7918;FS=1.569;HaplotypeScore=0;MLEAC=2;MLEAF=0.5;MQ=59.84;MQ0=0;MQRankSum=0.753;QD=27.52;ReadPosRankSum=1.043;SOR=1.085  GT:AD:DP:GQ:PL  0/0:13,0:13:39:0,39,520 1/1:0,11:11:33:430,33,0
+
+found chromosome_13    1323388 .       G       T       448.6   .       AC=2;AF=0.5;AN=4;BaseQRankSum=1.546;DP=35;Dels=0;ExcessHet=0.7918;FS=0;HaplotypeScore=0;MLEAC=2;MLEAF=0.5;MQ=60;MQ0=0;MQRankSum=0.99;QD=33.76;ReadPosRankSum=1.477;SOR=0.922  GT:AD:DP:GQ:PL  1/1:0,12:12:36:470,36,0 0/0:23,0:23:57:0,57,779
+```
+
+## 28/6/2020
+
+queuing up next HC step:
+
+```bash
+parallel -j 3 -i sh -c 'time bash HC_temp.sh {}' -- 8 9 10
+```
+
+and now that bgzipping + tabix is done, going to make variant only versions
+of the combined VCFs with bcftools:
+
+```bash
+mkdir -p data/alignments/genotyping/UG/variants
+cd bin/
+ln -sv ~/apps/bcftools/bcftools
+
+# quick test
+time ./bin/bcftools filter -i 'TYPE!="ref"' \
+data/alignments/genotyping/UG/combined/CC1373_combined.vcf.gz \
+test.vcf # took ~8 min
+
+# looks good - doing this over all VCFs
+time for fname in data/alignments/genotyping/UG/combined/*.vcf.gz; do
+    echo "currently on ${fname}"
+    base=$(basename ${fname} .vcf.gz)
+    time ./bin/bcftools filter -i 'TYPE!="ref"' ${fname} > \
+    data/alignments/genotyping/UG/variants/${base}.variants.vcf;
+    echo "done ${fname}"
+done
+```
+
+## 30/6/2020
+
+next HC step:
+
+```bash
+parallel -j 3 -i sh -c 'time bash HC_temp.sh {}' -- 11 12 13
+```
+
+### 1/7/2020
+
+final HC step (for CC strains...)
+
+```bash
+parallel -j 4 -i sh -c 'time bash HC_temp.sh {}' -- {14..17}
+```
+
+## 2/7/2020
+
+CC strains done! will have to combine chromosomal VCFs into full ones,
+bgzip + tabix those, as well as make combined versions with prev strains
+after this (although the prev strains for these will be different - doesn't
+make sense to stick older SL lines with CCs)
+
+wait - I did do that with the UG CC strains - might want to revisit those
+and see whether I need to make different combined VCFs
+
+now to do this with DL strains (swapping out CC in the regex match for DL)
+
+```bash
+parallel -j 4 -i sh -c 'time bash HC_temp.sh {}' -- {1..4}
+```
+
+combining all the CC haplotypecaller chromosomal VCFs:
+
+```bash
+time while read sample; do
+    if [[ ${sample} =~ "CC" ]]; then
+        echo "${sample}"
+        grep '^#' data/alignments/genotyping/HC/${sample}_samples_chr1.vcf > \
+            data/alignments/genotyping/HC/${sample}_samples.vcf
+        for i in {1..17}; do
+            grep -v '^#' data/alignments/genotyping/HC/${sample}_samples_chr${i}.vcf >> \
+            data/alignments/genotyping/HC/${sample}_samples.vcf
+            echo "added chromosome ${i} for ${sample}";
+        done
+    fi;
+done < data/alignments/fastq/symlinks/samples.txt
+```
+
+manually checked that samples look alright - clearing out files:
+
+```bash
+time while read sample; do
+    if [[ ${sample} =~ "CC" ]]; then
+        rm -v data/alignments/genotyping/HC/${sample}_samples_chr*.vcf*
+    fi;
+done < data/alignments/fastq/symlinks/samples.txt
+```
+
+bgzipping and tabixing full files:
+
+```bash
+time for fname in data/alignments/genotyping/HC/CC*; do
+    bgzip ${fname};
+    tabix -p vcf ${fname}.gz;
+done
+```
+
+now to use CombineVariants to add prev variants:
+
+```bash
+mkdir -p data/alignments/genotyping/HC/pairs
+mkdir -p data/alignments/genotyping/HC/combined
+# mv -v data/alignments/genotyping/HC/CC* data/alignments/genotyping/HC/pairs
+
+time while read sample; do
+    if [[ ${sample} =~ "CC" ]]; then
+        time java -jar ./bin/GenomeAnalysisTK.jar \
+        -T CombineVariants \
+        -R data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+        --variant ../alignments/genotyping/HC_diploid/anc_wt_HC/anc_wt_diploid.HC.variants.vcf.gz \
+        --variant data/alignments/genotyping/HC/pairs/${sample}_samples.vcf.gz \
+        -o data/alignments/genotyping/HC/combined/${sample}_combined.vcf \
+        -genotypeMergeOptions UNSORTED;
+    fi;
+done < data/alignments/fastq/symlinks/samples.txt
+```
+
+## 3/7/2020
+
+doing organelles (cpDNA, mtDNA) as well - defining intervals in
+`organelles.intervals` and modding `HC_temp.sh` as needed
+
+shoot - I think I forgot to do these for the CC strains - will
+queue that up next
+
+after organelles are ready, DL strains are done - 
+combining, bgzipping, and tabixing:
+
+```bash
+time while read sample; do
+    if [[ ${sample} =~ "DL" ]]; then
+        echo "${sample}"
+        grep '^#' data/alignments/genotyping/HC/${sample}_samples_chr1.vcf > \
+            data/alignments/genotyping/HC/${sample}_samples.vcf
+        for i in {1..17}; do
+            grep -v '^#' data/alignments/genotyping/HC/${sample}_samples_chr${i}.vcf >> \
+            data/alignments/genotyping/HC/${sample}_samples.vcf
+            echo "added chromosome ${i} for ${sample}";
+        done
+        grep -v '^#' data/alignments/genotyping/HC/${sample}_samples_organelles.vcf >> \
+            data/alignments/genotyping/HC/${sample}_samples.vcf
+    fi;
+done < data/alignments/fastq/symlinks/samples.txt
+
+# clearing chromosomal vcfs
+time while read sample; do
+    if [[ ${sample} =~ "DL" ]]; then
+        rm -v data/alignments/genotyping/HC/${sample}_samples_chr*.vcf*
+        rm -v data/alignments/genotyping/HC/${sample}_samples_organelles.vcf*
+    fi;
+done < data/alignments/fastq/symlinks/samples.txt
+
+# bgzip and tabix
+time for fname in data/alignments/genotyping/HC/DL*; do
+    echo "starting ${fname}"
+    time bgzip ${fname};
+    tabix -p vcf ${fname}.gz;
+    echo "done ${fname}"
+done
+```
+
+## 5/7/2020
+
+doing organelles for CC strains:
+
+```bash
+time while read sample; do
+    if [[ ${sample} =~ "CC" ]]; then
+        time java -jar ./bin/GenomeAnalysisTK.jar \
+        -T HaplotypeCaller \
+        -R data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+        -I data/alignments/bam/${sample}_0.bam \
+        -I data/alignments/bam/${sample}_5.bam \
+        --intervals organelles.intervals \
+        -ploidy 2 \
+        --output_mode EMIT_ALL_SITES \
+        --heterozygosity 0.02 \
+        --indel_heterozygosity 0.002 \
+        -o data/alignments/genotyping/HC/${sample}_samples_organelles.vcf;
+    fi;
+done < data/alignments/fastq/symlinks/samples.txt
+
+date
+```
+
+while this runs, have to use CombineVariants to create combined versions
+of the DL files
+
+```bash
+time while read sample; do
+    if [[ ${sample} =~ "DL" ]]; then
+        time java -jar ./bin/GenomeAnalysisTK.jar \
+        -T CombineVariants \
+        -R data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+        --variant ../alignments/genotyping/HC_diploid/anc_wt_HC/anc_wt_diploid.HC.variants.vcf.gz \
+        --variant ../alignments/genotyping/HC_diploid/all_dark_HC/all_dark_diploid.HC.variants.vcf.gz \
+        --variant data/alignments/genotyping/HC/pairs/${sample}_samples.vcf.gz \
+        -o data/alignments/genotyping/HC/combined/${sample}_combined.vcf \
+        -genotypeMergeOptions UNSORTED;
+    fi;
+done < data/alignments/fastq/symlinks/samples.txt
+```
+
+once organelles for CC strains are done, will need to:
+- append those to paired VCFs
+- do CombineVariants (on *just* the organelle files)
+- add the CombineVariants output to the existing combined files
+    - make sure that the samples are in the correct order before merging
+
+## 6/7/2020
+
+need to unzip paired CC VCFs before adding organelles, and then bgzip again
+
+```bash
+rm -v data/alignments/genotyping/HC/pairs/CC*tbi # clear index files
+for fname in data/alignments/genotyping/HC/pairs/CC*; do
+    echo ${fname}
+    time bgzip -d ${fname}
+done
+
+# adding organelles
+time while read sample; do
+    if [[ ${sample} =~ "CC" ]]; then
+        grep -v '^#' data/alignments/genotyping/HC/${sample}_samples_organelles.vcf >> \
+        data/alignments/genotyping/HC/pairs/${sample}_samples.vcf
+    fi;
+done < data/alignments/fastq/symlinks/samples.txt
+
+# rezipping and tabixing
+for fname in data/alignments/genotyping/HC/pairs/CC*; do
+    echo ${fname}
+    time bgzip ${fname}
+    tabix -p vcf ${fname}.gz
+done
+
+# combine variants for temp organelle files - to add to combined files
+time while read sample; do
+    if [[ ${sample} =~ "CC" ]]; then
+        time java -jar ./bin/GenomeAnalysisTK.jar \
+        -T CombineVariants \
+        -R data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+        --intervals organelles.intervals \
+        --variant ../alignments/genotyping/HC_diploid/anc_wt_HC/anc_wt_diploid.HC.variants.vcf.gz \
+        --variant data/alignments/genotyping/HC/${sample}_samples_organelles.vcf \
+        -o data/alignments/genotyping/HC/${sample}_combined_organelles.vcf \
+        -genotypeMergeOptions UNSORTED;
+    fi;
+done < data/alignments/fastq/symlinks/samples.txt
+
+# adding combined organelle files to combined full files
+time while read sample; do
+    if [[ ${sample} =~ "CC" ]]; then
+        grep -v '^#' data/alignments/genotyping/HC/${sample}_combined_organelles.vcf >> \
+        data/alignments/genotyping/HC/combined/${sample}_combined.vcf
+    fi;
+done < data/alignments/fastq/symlinks/samples.txt
+```
+
+...wait I forgot the scaffolds and mtMinus
+
+*headdesk*
+
+remaining to-do:
+
+- HC for SL lines (chromosomes, scaffolds, organelles)
+- combined files for SL lines
+- HC for scaffolds in CC and DL lines
+- update combined HC files for CC and DL lines with scaffolds
+
+cleaning up organelle files now that they've been combined:
+
+```bash
+rm -v data/alignments/genotyping/HC/*organelles*
+```
+
+creating scaffold intervals file:
+
+```bash
+# scaffolds range from 18 to 54
+touch scaffolds.intervals
+for i in {18..54}; do
+    echo "scaffold_${i}" >> scaffolds.intervals
+done
+echo "mtMinus" >> scaffolds.intervals
+```
+
+gonna try a different parallel strategy here - will parallelize samples over
+all of these missing regions
+
+```bash
+# HC_scaffolds.sh
+sample=$1
+
+time java -jar ./bin/GenomeAnalysisTK.jar \
+-T HaplotypeCaller \
+-R data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+-I data/alignments/bam/${sample}_0.bam \
+-I data/alignments/bam/${sample}_5.bam \
+--intervals scaffolds.intervals \
+-ploidy 2
+--output_mode EMIT_ALL_SITES \
+--heterozygosity 0.02 \
+--indel_heterozygosity 0.002 \
+-o data/alignments/genotyping/HC/${sample}_samples_scaffolds.vcf
+
+date
+```
+
+test run:
+
+```bash
+bash HC_scaffolds.sh CC1373
+```
+
+looks good, was done in 16 min
+
+next up:
+
+```bash
+parallel -j 2 -i sh -c 'bash HC_scaffolds.sh {}' -- CC1952 CC2342
+parallel -j 2 -i sh -c 'bash HC_scaffolds.sh {}' -- CC2344 CC2931
+parallel -j 2 -i sh -c 'bash HC_scaffolds.sh {}' -- CC2935 CC2937
+```
+
+all done - adding these to the pairs files:
+
+```bash
+rm -v data/alignments/genotyping/HC/pairs/CC*tbi # clear index files
+for fname in data/alignments/genotyping/HC/pairs/CC*; do
+    echo ${fname}
+    time bgzip -d ${fname}
+done
+
+# adding scaffolds + mtMinus
+time while read sample; do
+    if [[ ${sample} =~ "CC" ]]; then
+        grep -v '^#' data/alignments/genotyping/HC/${sample}_samples_scaffolds.vcf >> \
+        data/alignments/genotyping/HC/pairs/${sample}_samples.vcf
+    fi;
+done < data/alignments/fastq/symlinks/samples.txt
+
+# rezipping and tabixing
+time for fname in data/alignments/genotyping/HC/pairs/CC*; do
+    echo ${fname}
+    time bgzip ${fname}
+    tabix -p vcf ${fname}.gz
+done
+
+# combine variants for temp scaffold files - to add to combined files
+time while read sample; do
+    if [[ ${sample} =~ "CC" ]]; then
+        time java -jar ./bin/GenomeAnalysisTK.jar \
+        -T CombineVariants \
+        -R data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+        --intervals scaffolds.intervals \
+        --variant ../alignments/genotyping/HC_diploid/anc_wt_HC/anc_wt_diploid.HC.variants.vcf.gz \
+        --variant data/alignments/genotyping/HC/${sample}_samples_scaffolds.vcf \
+        -o data/alignments/genotyping/HC/${sample}_combined_scaffolds.vcf \
+        -genotypeMergeOptions UNSORTED;
+    fi;
+done < data/alignments/fastq/symlinks/samples.txt
+
+# adding combined scaffold files to combined full files
+time while read sample; do
+    if [[ ${sample} =~ "CC" ]]; then
+        grep -v '^#' data/alignments/genotyping/HC/${sample}_combined_scaffolds.vcf >> \
+        data/alignments/genotyping/HC/combined/${sample}_combined.vcf
+    fi;
+done < data/alignments/fastq/symlinks/samples.txt
+
+```
+
+## 7/7/2020
+
+remaining to do:
+
+- check on DL files
+- bgzip and tabix DL and CC combined files
+- HC for SL lines (chromosomes, scaffolds, organelles)
+- create combined HC files for SL lines
 
 
 
