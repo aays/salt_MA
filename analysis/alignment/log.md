@@ -1508,14 +1508,150 @@ done < data/alignments/fastq/symlinks/samples.txt
 
 remaining to do:
 
-- check on DL files
+- do scaffold runs for DL files and regenerate combined files
 - bgzip and tabix DL and CC combined files
 - HC for SL lines (chromosomes, scaffolds, organelles)
 - create combined HC files for SL lines
 
+for DL scaffold runs - just rerunning the code from just above but with
+the regex matching DL instead
+
+```bash
+parallel -j 2 -i sh -c 'bash HC_scaffolds.sh {}' -- DL40 DL46
+parallel -j 2 -i sh -c 'bash HC_scaffolds.sh {}' -- DL51 DL53
+parallel -j 2 -i sh -c 'bash HC_scaffolds.sh {}' -- DL55 DL57
+parallel -j 2 -i sh -c 'bash HC_scaffolds.sh {}' -- DL41 DL58
+```
+
+once this is done, rerun yesterday's code to clear existing combined files,
+update pairs with scaffolds and mtMinus
+
+might need to regen combined files from scratch in full - also do this
+for just one of the CC files to make sure that those were also concatenated
+correctly (bc I'm no longer sure) 
+
+shit - the contigs need to be reordered - this might be an issue for the CC files as well
+
+I can try fixing this with grep:
+
+```bash
+grep '^#' DL40_samples.vcf > DL40_samples_sorted.vcf
+grep -v '^#' DL40_samples.vcf | grep '^chromosome' >> DL40_samples_sorted.vcf
+grep -v '^#' DL40_samples.vcf | grep '^scaffold' >> DL40_samples_sorted.vcf
+grep -v '^#' DL40_samples.vcf | grep '^cpDNA' >> DL40_samples_sorted.vcf
+grep -v '^#' DL40_samples.vcf | grep '^mt[MD]' >> DL40_samples_sorted.vcf
+```
+
+wait - this actually doubled up the scaffold variants, and now the sorting
+above actually made it *harder* to fix that
+
+here's the fix:
+
+```bash
+sample=$1
+grep '^#' ${sample}_samples.vcf > ${sample}_samples_fixed.vcf
+grep '^chromosome' ${sample}_samples.vcf >> ${sample}_samples_fixed.vcf
+grep '^scaffold' ${sample}_samples.vcf | sort -k1,1 -k2,2n | uniq >> ${sample}_samples_fixed.vcf
+grep -v '^#' ${sample}_samples.vcf | grep '^[cm][pt]D' >> ${sample}_samples_fixed.vcf
+grep '^mtMinus' ${sample}_samples.vcf | sort -k1,1 -k2,2n | uniq >> ${sample}_samples_fixed.vcf
+```
+
+meanwhile, the CC files (combined and pairs) are out of order, and can
+be fixed with the grep code above:
+
+```bash
+sample=$1
+grep '^#' ${sample}_samples.vcf > ${sample}_samples_sorted.vcf
+grep -v '^#' ${sample}_samples.vcf | grep '^chromosome' >> ${sample}_samples_sorted.vcf
+grep -v '^#' ${sample}_samples.vcf | grep '^scaffold' >> ${sample}_samples_sorted.vcf
+grep -v '^#' ${sample}_samples.vcf | grep '^cpDNA' >> ${sample}_samples_sorted.vcf
+grep -v '^#' ${sample}_samples.vcf | grep '^mt[MD]' >> ${sample}_samples_sorted.vcf
+```
+
+and now, just going to rerun CombineVariants in full:
+
+```bash
+# not specifying intervals
+time while read sample; do
+    if [[ ${sample} =~ "CC" ]]; then
+        time java -jar ./bin/GenomeAnalysisTK.jar \
+        -T CombineVariants \
+        -R data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+        --variant ../alignments/genotyping/HC_diploid/anc_wt_HC/anc_wt_diploid.HC.variants.vcf.gz \
+        --variant data/alignments/genotyping/HC/${sample}_samples_scaffolds.vcf \
+        -o data/alignments/genotyping/HC/${sample}_combined_scaffolds.vcf \
+        -genotypeMergeOptions UNSORTED;
+    fi;
+done < data/alignments/fastq/symlinks/samples.txt
+```
+
+## 8/7/2020
+
+today: 
+- HC for SL files
+- CombineVariants for SL files
+- bgzip and tabix pairs and combined vcfs
+
+SL HC:
+
+```bash
+time for i in 27 29; do
+    time java -jar ./bin/GenomeAnalysisTK.jar \
+    -T HaplotypeCaller \
+    -R data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+    -I data/alignments/bam/SL${i}_0.bam \
+    -I data/alignments/bam/SL${i}_5.bam \
+    -ploidy 2 \
+    --output_mode EMIT_ALL_SITES \
+    --heterozygosity 0.02 \
+    --indel_heterozygosity 0.002 \
+    -o data/alignments/genotyping/HC/pairs/SL${i}_samples.vcf;
+done
+
+time java -jar ./bin/GenomeAnalysisTK.jar \
+-T HaplotypeCaller \
+-R data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+-I data/alignments/bam/SL26_5.bam \
+-ploidy 2 \
+--output_mode EMIT_ALL_SITES \
+--heterozygosity 0.02 \
+--indel_heterozygosity 0.002 \
+-o data/alignments/genotyping/HC/pairs/SL26_samples.vcf
+```
+
+bgzipping and tabixing the pairs + combined vcfs:
+
+```bash
+# combined files
+time for fname in data/alignments/genotyping/HC/combined/*combined.vcf; do
+    echo "${fname}"
+    bgzip ${fname}
+    tabix -p vcf ${fname}.gz
+    echo "done ${fname}"
+done
+
+# pairs
+time for fname in data/alignments/genotyping/HC/pairs/*samples.vcf; do
+    echo "${fname}"
+    bgzip ${fname}
+    tabix -p vcf ${fname}.gz
+    echo "done ${fname}"
+done
+```
 
 
+## 9/7/2020
 
+- bgzip and tabix the SL files (once SL26 is completed)
+- create combined versions of the SL files
+- get started on script for creating filtered vcfs containing only potential mutations
+
+getting started with filtering:
+
+```bash
+mkdir -p analysis/filtering
+touch analysis/filtering/log.md
+```
 
 
 
