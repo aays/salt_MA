@@ -4,8 +4,7 @@ filter_candidate_muts.py - filter SNMs in UG paired VCF output
 important to run this on just the pairs - the output
 can then be cross checked vs the 'combined' files
 
-script assumes that only two samples (with sample names
-X_0 and X_5) are included in the VCF
+script assumes that only two samples are included in the VCF
 
 main criteria:
     1. GQ >= 30
@@ -100,19 +99,20 @@ def parse_records(vcf, out_format, out):
         File path to input VCF
     out_format : str
         [table|vcf] - whether to write as new VCF or
-        as a tab-separated file (default)
+        as a tab-separated file (default: VCF)
     out : str
         Name of file to write to
 
     Returns
     -------
     None
-    Writes to specified file.
+        Writes to specified file.
     '''
     vcf_in = VCF(vcf)
     print('[saltMA] initiating filtering for {}...'.format(os.path.basename(vcf)))
     counter = 0
     total_count = 0
+
     if out_format == 'vcf':
         outfile = Writer(out, vcf_in)
         outfile.write_header()
@@ -129,6 +129,7 @@ def parse_records(vcf, out_format, out):
                 outfile.write_record(record)
             elif out_format == 'table':
                 recs.append(record)
+
     if out_format == 'table':
         with open(out, 'w') as f:
             header_string = '\t'.join(['fname', 'chrom', 'pos', 'ref', 'alt',
@@ -141,6 +142,7 @@ def parse_records(vcf, out_format, out):
                         record.REF, str(record.ALT), str(list(record.gt_bases)),
                         str(list(record.gt_quals)), str(list(record.gt_depths)) + '\n'])
                 f.write(out_string)
+
     print('[saltMA] completed search for {}'.format(os.path.basename(vcf)))
     print('[saltMA] found {} matches over {} sites.'.format(counter,
         total_count))
