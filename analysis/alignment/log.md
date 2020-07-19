@@ -1653,16 +1653,129 @@ mkdir -p analysis/filtering
 touch analysis/filtering/log.md
 ```
 
+## 10/7/2020
+
+- bgzip and tabix the SL files (once SL26 is completed)
+- create combined versions of the SL files
+
+creating combined versions:
 
 
+```bash
+for i in 26 27 29; do
+    time java -jar ./bin/GenomeAnalysisTK.jar \
+    -T CombineVariants \
+    -R data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+    --variant ../alignments/genotyping/HC_diploid/anc_wt_HC/anc_wt_diploid.HC.variants.vcf.gz \
+    --variant ../alignments/genotyping/HC_diploid/all_dark_HC/all_dark_diploid.HC.variants.vcf.gz \
+    --variant ../alignments/genotyping/HC_diploid/all_SL_HC/allSL.diploid.HC.variants.vcf.gz \
+    --variant data/alignments/genotyping/HC/pairs/SL${i}_samples.vcf.gz \
+    -o data/alignments/genotyping/HC/combined/SL${i}_combined.vcf \
+    -genotypeMergeOptions UNSORTED;
+done
+```
 
+## 12/7/2020
 
+oops - I missed a VCF with wild type strains when creating the combined UG files:
 
+```bash
+mv -v data/alignments/genotyping/UG/combined data/alignments/genotyping/UG/combined_old
+mkdir -p data/alignments/genotyping/UG/combined
 
+time while read sample; do
+    time java -jar ./bin/GenomeAnalysisTK.jar \
+    -T CombineVariants \
+    -R data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+    --variant ../alignments/genotyping/unified_genotyper/UG_diploid/wt_ancestors/wt_diploid.UG.vcf.gz \
+    --variant data/alignments/genotyping/UG/combined_old/${sample}_combined.vcf.gz \
+    -o data/alignments/genotyping/UG/combined/${sample}_combined.vcf \
+    -genotypeMergeOptions UNSORTED;
+done < data/alignments/fastq/symlinks/samples.txt
+```
 
+## 13/7/2020
 
+doing the same for the HC lines:
 
+```bash
+mv -v data/alignments/genotyping/HC/combined data/alignments/genotyping/HC/combined_old
+mkdir -p data/alignments/genotyping/HC/combined
 
+time while read sample; do
+    time java -jar ./bin/GenomeAnalysisTK.jar \
+    -T CombineVariants \
+    -R data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+    --variant ../alignments/genotyping/HC_diploid/anc_wt_HC/anc_wt_diploid.HC.variants.vcf.gz \
+    --variant ../alignments/genotyping/HC_diploid/all_dark_HC/all_dark_diploid.HC.variants.vcf.gz \
+    --variant ../alignments/genotyping/HC_diploid/all_SL_HC/allSL.diploid.HC.variants.vcf.gz \
+    --variant data/alignments/genotyping/HC/pairs/${sample}_samples.vcf.gz \
+    --o data/alignments/genotyping/HC/combined/${sample}_combined.vcf \
+    -genotypeMergeOptions UNSORTED;
+done < data/alignments/fastq/symlinks/samples.txt
+```
+
+looks good - now to just bgzip and tabix
+
+next up - recreating the DL41 and 46 but with pairs
+switched to see if that fixes the issue
+
+should also check combined VCFs to see if the observed
+variants are persistent across the ancestral pooled DL samples
+
+## 15/7/2020
+
+queueing up DL 'test' pairs
+
+```bash
+mkdir -p data/alignments/genotyping/UG/DL_test
+
+time java -jar ./bin/GenomeAnalysisTK.jar \
+-T UnifiedGenotyper \
+-R data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+-I data/alignments/bam/DL41_0.bam \
+-I data/alignments/bam/DL46_5.bam \
+-glm BOTH \
+-ploidy 2 \
+--output_mode EMIT_ALL_SITES \
+--heterozygosity 0.02 \
+--indel_heterozygosity 0.002 \
+-o data/alignments/genotyping/UG/DL_test/DL41_46.vcf
+
+time java -jar ./bin/GenomeAnalysisTK.jar \
+-T UnifiedGenotyper \
+-R data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+-I data/alignments/bam/DL46_0.bam \
+-I data/alignments/bam/DL41_5.bam \
+-glm BOTH \
+-ploidy 2 \
+--output_mode EMIT_ALL_SITES \
+--heterozygosity 0.02 \
+--indel_heterozygosity 0.002 \
+-o data/alignments/genotyping/UG/DL_test/DL46_41.vcf
+```
+
+## 16/7/2020
+
+next up - bgzip, tabix, and then check for mutation counts:
+
+```bash
+for test in 41_46 46_41; do
+    time python3.5 analysis/filtering/filter_candidate_muts.py \
+    --vcf data/alignments/genotyping/UG/DL_test/DL${test}.vcf.gz \
+    --out_format table \
+    --out data/alignments/genotyping/UG/DL_test/DL${test}_muts.txt
+done
+```
+
+would you look at that:
+
+```
+$ wc -l data/alignments/genotyping/UG/DL_test/*txt
+  15 data/alignments/genotyping/UG/DL_test/DL41_46_muts.txt
+  16 data/alignments/genotyping/UG/DL_test/DL46_41_muts.txt
+  31 total
+```
 
 
 

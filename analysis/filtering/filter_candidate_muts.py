@@ -29,17 +29,24 @@ def args():
 
     parser.add_argument('-v', '--vcf', required=True,
                         type=str, help='VCF to filter (.vcf.gz)')
+    parser.add_argument('-g', '--gq', required=False, default=30,
+                        type=int, help='GQ threshold (default 30)')
     parser.add_argument('-f', '--out_format', required=False, default='vcf',
                         type=str, help='VCF format or tabular format? \
                         ([table|vcf] - default VCF)') 
+    parser.add_argument('-l', '--verbose_level', required=False, default=2,
+                        type=int, help='verbose level (0=none, 1=low, 2=all)')
+    parser.add_argument('-p', '--purity_filter', required=False, action='store_true', 
+                        help='enable alt allele purity filter')
     parser.add_argument('-o', '--out', required=True,
                         type=str, help='File to write to')
 
     args = parser.parse_args()
 
-    return args.vcf, args.out_format, args.out
+    return args.vcf, args.gq, args.out_format, args.verbose_level, \
+            args.purity_filter, args.out
 
-def check_record(record):
+def check_record(record, gq, purity_filter=False):
     '''
     cyvcf2.cyvcf2.Variant -> bool
 
@@ -59,7 +66,7 @@ def check_record(record):
         True if record passes all filters.
 
     '''
-    # check if invariant site
+    # check if variant site
     if not len(record.ALT) > 0:
         return False
 
@@ -71,8 +78,8 @@ def check_record(record):
     if record.num_het != 0:
         return False
 
-    # check GQ > 30
-    if not all(record.gt_quals >= 30):
+    # check GQ > threshold
+    if not all(record.gt_quals >= gq):
         return False
 
     # check no missing genotypes
@@ -80,13 +87,15 @@ def check_record(record):
         return False
 
     # check that sample with mutated site has <2 reads of non mut allele
-    if not min(record.gt_depths - record.gt_alt_depths) < 2:
-        return False
+    # only checked for if purity filter enabled
+    if purity_filter:
+        if not min(record.gt_depths - record.gt_alt_depths) < 2:
+            return False
 
     # only runs if all checks passed
     return True
 
-def parse_records(vcf, out_format, out):
+def parse_records(vcf, gq, out_format, verbose_level, purity_filter, out):
     '''
     (str, str, str) -> None
 
@@ -97,9 +106,16 @@ def parse_records(vcf, out_format, out):
     -------
     vcf : str
         File path to input VCF
+    gq : int
+        GQ threshold (records >gq kept)
+    verbose_level : int
+        How much to print to console.
+        If 0 - print no progress info besides tqdm bar
+        If 1 - print counter at each chromosome completion
+        If 2 - print all candidate information as they are found
     out_format : str
         [table|vcf] - whether to write as new VCF or
-        as a tab-separated file (default: VCF)
+        as a tab-separated file
     out : str
         Name of file to write to
 
@@ -112,36 +128,44 @@ def parse_records(vcf, out_format, out):
     print('[saltMA] initiating filtering for {}...'.format(os.path.basename(vcf)))
     counter = 0
     total_count = 0
+    prev_chr = None
 
     if out_format == 'vcf':
         outfile = Writer(out, vcf_in)
         outfile.write_header()
     elif out_format == 'table':
         recs = [] # store records in memory - shouldn't be too many
+        f = open(out, 'w')
+        header_string = '\t'.join(['fname', 'chrom', 'pos', 'ref', 'alt',
+        'gt_bases', 'gt_quals', 'gt_depths'])
+        f.write(header_string + '\n')
+        basename = os.path.basename(vcf).replace('.vcf.gz', '')
 
     for record in tqdm(vcf_in):
         total_count += 1
-        if check_record(record):
+        if check_record(record, gq=gq, purity_filter=purity_filter):
             counter += 1
-            print('\n[saltMA] candidate mut found at {}'.format(record.__repr__()))
-            print('[saltMA] current count is {}'.format(counter))
+            if verbose_level == 1:
+                if not prev_chr:
+                    prev_chr = record.CHROM
+                    continue
+                elif prev_chr != record.CHROM:
+                    tqdm.write('[saltMA] {} completed.'.format(prev_chr))
+                    tqdm.write('[saltMA] current count is {}'.format(counter))
+                    prev_chr = record.CHROM
+            if verbose_level == 2:
+                tqdm.write('[saltMA] candidate mut found at {}'.format(record.__repr__()))
+                tqdm.write('[saltMA] current count is {}'.format(counter))
             if out_format == 'vcf':
                 outfile.write_record(record)
             elif out_format == 'table':
-                recs.append(record)
-
-    if out_format == 'table':
-        with open(out, 'w') as f:
-            header_string = '\t'.join(['fname', 'chrom', 'pos', 'ref', 'alt',
-            'gt_bases', 'gt_quals', 'gt_depths'])
-            f.write(header_string + '\n')
-            basename = os.path.basename(vcf).replace('.vcf.gz', '')
-            print('[saltMA] writing to file...')
-            for record in recs:
                 out_string = '\t'.join([basename, record.CHROM, str(record.POS),
                         record.REF, str(record.ALT), str(list(record.gt_bases)),
                         str(list(record.gt_quals)), str(list(record.gt_depths)) + '\n'])
                 f.write(out_string)
+
+    if out_format == 'table':
+        f.close()
 
     print('[saltMA] completed search for {}'.format(os.path.basename(vcf)))
     print('[saltMA] found {} matches over {} sites.'.format(counter,
