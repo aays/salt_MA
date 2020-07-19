@@ -48,17 +48,23 @@ def args():
 
 def check_record(record, gq, purity_filter=False):
     '''
-    cyvcf2.cyvcf2.Variant -> bool
 
     Function checks for mutations that fulfill filters:
     1) GQ > 30
     2) no missing genotypes
     3) sample with mutated site has <2 reads of non mut allele
+    (purity filter)
 
     Parameters
     -------
-    record : cyvcf2 variant obj
+    record : cyvcf2.cyvcf2.Variant
         record to be checked
+    gq : int
+        GQ threshold - will exclude records where _any_
+        call GQ value is below
+    purity_filter : bool
+        if enabled, will filter out records where mutated site
+        has >2 reads of non mut allele
 
     Returns
     ------
@@ -97,8 +103,6 @@ def check_record(record, gq, purity_filter=False):
 
 def parse_records(vcf, gq, out_format, verbose_level, purity_filter, out):
     '''
-    (str, str, str) -> None
-
     Iterates through VCF and writes records passing above
     filters to file.
 
@@ -116,6 +120,9 @@ def parse_records(vcf, gq, out_format, verbose_level, purity_filter, out):
     out_format : str
         [table|vcf] - whether to write as new VCF or
         as a tab-separated file
+    purity_filter : bool
+        if enabled, will filter out records where mutated site
+        has >2 reads of non mut allele (see check_record)
     out : str
         Name of file to write to
 
