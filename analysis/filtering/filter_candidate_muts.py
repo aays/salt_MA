@@ -169,7 +169,6 @@ def parse_records(vcf, gq, out_format, vcf_type, verbose_level, purity_filter, o
         outfile = Writer(out, vcf_in)
         outfile.write_header()
     elif out_format == 'table':
-        recs = [] # store records in memory - shouldn't be too many
         f = open(out, 'w')
         header_string = '\t'.join(['fname', 'chrom', 'pos', 'ref', 'alt',
         'gt_bases', 'gt_quals', 'gt_depths'])
