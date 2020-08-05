@@ -227,6 +227,194 @@ today:
 
 - export `gq_all_samples.txt` and analyse distribution of GQs in an Rmd
 
+## 22/7/2020
+
+today:
+
+start adapting mutation filtering script to take into account 'ancestral'
+mutation state
+
+let's find one from the CC1373 first pass mutations - the first
+one is at `chromosome_2:6902447`:
+
+```python
+>>> from cyvcf2 import VCF
+>>> fname = 'data/alignments/genotyping/UG/combined/CC1373_combined.vcf.gz'
+>>> v = VCF(fname)
+>>> recs = [rec for rec in v('chromosome_2:6902447-6902448')]
+>>> recs
+[Variant(chromosome_2:6902447 G/A), Variant(chromosome_2:6902448 C/)]
+>>> recs[0]
+Variant(chromosome_2:6902447 G/A)
+>>> rec = recs[0]
+>>> rec.genotypes
+[[0, 0, False], [0, 0, False], [0, 0, False], [0, 0, False], [0, 0, False], [0, 0, False], [0, 0, False], [0, 0, False], [0, 0, False], [0, 0, False], [0, 0, False], [0, 0, False], [0, 0, False], [0, 0, False], [0, 0, False], [0, 0, False], [0, 0, False], [1, 1, False], [0, 0, False], [0, 0, False], [0, 0, False], [0, 0, False], [0, 0, False]]
+>>> rec.__str__()
+'chromosome_2\t6902447\t.\tG\tA\t201.41\t.\tAC=2;AF=0.043;AN=46;BaseQRankSum=0.657;DP=812;Dels=0;ExcessHet=0.7918;FS=7.993;HaplotypeScore=0;MLEAC=2;MLEAF=0.5;MQ=59.62;MQ0=0;MQRankSum=-0.152;QD=29.97;ReadPosRankSum=0.859;SOR=0.612;set=variant2\tGT:AD:DP:GQ:PL\t0/0:.:12:.:.\t0/0:.:15:.:.\t0/0:.:31:.:.\t0/0:.:21:.:.\t0/0:.:23:.:.\t0/0:.:27:.:.\t0/0:.:13:.:.\t0/0:.:21:.:.\t0/0:.:23:.:.\t0/0:.:32:.:.\t0/0:.:24:.:.\t0/0:.:27:.:.\t0/0:.:33:.:.\t0/0:.:25:.:.\t0/0:.:32:.:.\t0/0:.:31:.:.\t0/0:.:63:.:.\t1/1:0,14:14:42:560,42,0\t0/0:21,0:21:63:0,63,840\t0/0:.:71:.:.\t0/0:.:93:.:.\t0/0:.:76:.:.\t0/0:.:84:.:.\n'
+```
+
+this looks like a bona fide new mutation - nice
+
+going to be hard to code this up - here's what needs to be considered:
+
+1. identify the indices at which we have our 0 and 5 samples in `genotypes`
+(since they're not always at the end of the file) 
+2. for now, assume that all other samples should differ from the novel allele between the 0 and 5 
+(should maybe write code to specifically check for this)
+
+it's key that the samples be allowed to differ from one another as long as none of them
+have the same novel allele between the pairs - although might be good to have
+a counter for these because it shouldn't happen *too* often (that or the differences
+should be across groups of lines and not within them)
+
+alright, done a first pass - going to generate table formatted files and then compare
+against the first pass mutations
+
+```bash
+mkdir -p data/mutations/ancestral
+
+# test run
+time python3.5 analysis/filtering/filter_candidate_muts.py \
+--vcf data/alignments/genotyping/UG/combined/CC1373_combined.vcf.gz \
+--gq 30 \
+--out_format table \
+--vcf_type combined \
+--verbose_level 1 \
+--purity_filter \ # for consistency
+--out data/mutations/ancestral/CC1373_UG_combined.txt
+```
+
+## 24/7/2020
+
+so the above looks good, but I'm going to put this on hold for a bit - will need to
+revisit once the specific logic for each of the sample groups is figured out
+
+for now - need to generate tables of mutations that are `>GQ20` without the purity filter:
+
+```bash
+mkdir -p data/mutations/gq_tests/pairs_20/
+
+time for fname in data/alignments/genotyping/UG/pairs/*vcf.gz; do
+    base=$(basename ${fname} _samples.vcf.gz)
+    time python3.5 analysis/filtering/filter_candidate_muts.py \
+    --vcf ${fname} --gq 20 --vcf_type pairs --verbose_level 1 \
+    --out_format table --out data/mutations/gq_tests/pairs_20/${base}_GQ20.txt
+done
+```
+
+## 4/8/2020
+
+finally getting back on this - next up, need to install IGV on the server in some way
+to queue up screenshots for each of the mutations of interest 
+
+installing igvtools (all platform compatible):
+
+```bash
+cd ~/apps
+wget https://data.broadinstitute.org/igv/projects/downloads/2.8/IGV_2.8.9.zip
+time unzip IGV_2.8.9.zip
+```
+
+update - need a java 8 compatible version - java 11 not supported on server
+
+trying IGV 2.4.10 instead (I have 2.4.0 on my Mac, and apparently
+2.4 is java 8 compatible):
+
+```bash
+wget https://data.broadinstitute.org/igv/projects/downloads/2.4/IGV_2.4.19.zip
+wget https://data.broadinstitute.org/igv/projects/downloads/2.4/igvtools_2.4.19.zip
+time unzip IGV_2.4.19.zip
+time unzip IGVTools_2.4.19
+```
+
+so apparently `igv.sh` will open the GUI to do whatever operation
+is asked of it, even if a batch script is provided - need to install
+`xvfb` to run it in command line only mode (since we can't use X11 otherwise)
+
+installing xvfb:
+
+```bash
+wget http://ftp.xfree86.org/pub/XFree86/4.6.0/binaries/Linux-ix86-glibc20/Xvfb.tgz
+tar zxvf Xvfb.tgz
+```
+
+update: this is totally not working for weird C reasons that are above my pay grade and
+cognitive ability to figure out
+
+instead - going to try this with X11 forwarding - this works, although it's a bit buggy and laggy,
+and could be worth giving a shot to
+
+going to set up a symlink to 'IGV.sh' in the project folder before giving that a shot
+with the `--batch` setting
+
+test batch script (after making a new `screenshots` dir):
+
+```
+new
+snapshotDirectory data/mutations/screenshots
+load data/alignments/bam/CC1373_0.bam index=data/alignments/bam/CC1373_0.bam
+load data/alignments/bam/CC1373_5.bam index=data/alignments/bam/CC1373_5.bam
+genome data/references/chlamy.5.3.w_organelles_mtMinus.fasta
+maxPanelHeight 500
+goto chromosome_2:6944200-6944300
+snapshot CC1373_chr2_6944200-6944300.png
+exit
+```
+
+here goes nothing:
+
+```bash
+./bin/igv.sh --batch=test.batch
+```
+
+so this works... technically. it's agonizingly slow (X11 forwarding apparently
+generally is) and will run for >10 minutes on a single bam, let alone two
+
+wait - there's an xvfb solution in [this anonymous blog post](http://thedusseldorfer.blogspot.com/2013/09/remotely-plotting-with-igv-even-without.html)!
+
+here goes:
+
+```bash
+cd ~/apps
+wget ftp://ftp.xfree86.org/pub/XFree86/4.8.0/binaries/Linux-x86_64-glibc23/Xfnts.tgz
+wget ftp://ftp.xfree86.org/pub/XFree86/4.8.0/binaries/Linux-x86_64-glibc23/Xvfb.tgz
+tar zxvf Xfnts.tgz
+tar zxvf Xvfb.tgz
+cd bin/
+./Xvfb :1 -nolisten tcp -fp /home/hasans11/apps/lib/X11/fonts/misc/ # starts X server
+export DISPLAY=:1
+```
+
+and this works! 
+
+some notes
+
+- display port 0 was taken, but 1 worked just fine
+- there are some warnings about opening a security policy file, but overall it still works fine
+- the absolute path to the fonts dir needs to be given to the Xvfb command
+    - doesn't work with a relative path
+- I did change `apps/lib/X11/xorg.conf` based on the manual solution found [here](https://access.redhat.com/solutions/320563)
+    - this was prior to the absolute/relative path fix above, though, so I don't know if it actually helped much
+
+next up - write a Python script that will use the table output files to create temp IGV batch scripts
+
+things to figure out:
+
+- file naming convention
+- how much room to give around the candidate mutation
+
+otherwise, the operation seems pretty straightforward - for a given input file,
+write the batch script to a temp text file and use that to run IGV on the command line
+using `subprocess` - this will require `DISPLAY` to be set and an Xvfb server to be
+running of course
+
+will output both SNMs and indels, but these need to be named differently and there
+should be an option to just output one and not the other (ie an option that modifies
+the batch script)
+
+alright, script (`mutation_snapshots.py`) looks good - test this tomorrow morning
+(lol it's 1 am... I got really into this)
+
 
 
 
