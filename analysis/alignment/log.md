@@ -1778,4 +1778,8 @@ $ wc -l data/alignments/genotyping/UG/DL_test/*txt
 ```
 
 
+## 20/7/2020
+
+trying haplotypecaller again with the `EMIT_REF_CONFIDENCE` option to see if that
+affects anything
 
