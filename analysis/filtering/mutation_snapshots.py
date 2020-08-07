@@ -15,6 +15,7 @@ import os
 import sys
 import csv
 import re
+import time
 import subprocess
 import argparse
 from tqdm import tqdm
@@ -43,56 +44,70 @@ def args():
 
     args = parser.parse_args()
 
-    return args.filename, args.igv, args.reference, args.bam_files, args.flank_size, \
+    return args.fname, args.igv, args.reference, args.bam_files, args.flank_size, \
         args.outdir, args.snps_only, args.indels_only
 
 
 def create_batch_script(fname, reference, bam_files, flank_size,
-        outdir, snps_only=None, indels_only=None):
+                        outdir, snps_only=None, indels_only=None):
     '''
-    writes temporary batch script for IGV - will need to be deleted separately
+    writes temporary batch script for IGV - this script is later
+    deleted after use in generate_snapshots()
 
+    see documentation for generate_snapshots() for arg descriptions
     '''
     fname_temp = os.path.basename(fname).rstrip('.txt') + '.batch.temp'
     with open(fname_temp, 'w') as f:
         f.write('new\n')
-        f.write('snapshotDirectory {}\n',format(outdir))
+        f.write('snapshotDirectory {}\n'.format(outdir))
         f.write('genome {}\n'.format(reference))
         for bam_file in bam_files:
             f.write('load {}\n'.format(bam_file))
         with open(fname, 'r', newline='') as f_in:
             reader = csv.DictReader(f_in, delimiter='\t')
-            for record in reader:
+            print('[saltMA] writing variants to batch script...')
+            for record in tqdm(reader):
                 chrom = record['chrom']
                 start = int(record['pos']) - flank_size
                 end = int(record['pos']) + flank_size
-                if snps_only or indels_only:
-                    try:
-                        pattern = "^\[['ACGT, ]+\]$"
-                        match = re.search(pattern, record['alt'])
-                        assert match
-                    except:
-                        print('[saltMA] An alt column in the input table is bonked')
-                        print('[saltMA] The record was {}:{}'.format(record['chrom'], record['pos']))
-                        print('[saltMA] The offending ALT column was {}'.format(record['alt']))
-                        raise ValueError()
-                    alt_column = eval(record['alt'])
-                    max_alt_length = max(set([len(s) for s in alt_column]))
-                    if max_alt_length > 1 and snps_only:
-                        continue
-                    elif max_alt_length == 1 and indels_only:
-                        continue
-                    else:
-                        pass
+                try: # make sure we don't eval something fishy
+                    pattern = "^\[[0-9\., ]+\]+"
+                    match = re.search(pattern, record['gt_quals'])
+                    assert match
+                    pattern = "^\[['ACGT, ]+\]$"
+                    match = re.search(pattern, record['alt'])
+                    assert match
+                except:
+                    print('[saltMA] either a GT qual or an alt column in the input table is bonked')
+                    print('[saltMA] The record was {}:{}'.format(record['chrom'], record['pos']))
+                    raise ValueError()
+
+                # assign snp or indel
+                alt_column = eval(record['alt'])
+                max_alt_length = max(set([len(s) for s in alt_column]))
+                if max_alt_length > 1 or len(record['ref']) > 1:
+                    variant_type = 'indel'
+                elif max_alt_length == 1 and len(record['ref']) == 1:
+                    variant_type = 'snp'
+                else:
+                    raise ValueError('[saltMA] ref/alt lengths are being weird...')
+
+                # filter if needed
+                if snps_only and variant_type == 'indel':
+                    continue
+                elif indels_only and variant_type == 'snp':
+                    continue
+                quals = eval(record['gt_quals'])
+                quals = 'GQ' + '_'.join([str(int(q)) for q in quals])
                 f.write('goto {}:{}-{}\n'.format(chrom, start, end))
                 fname_out = [record['fname'].rstrip('_samples'),
-                        record['chrom'], record['pos']]
-                f.write('snapshot {}_{}_{}.png\n'.format(*fname_out))
+                        record['chrom'], record['pos'], quals, variant_type]
+                f.write('snapshot {}_{}_{}_{}_{}.png\n'.format(*fname_out))
         f.write('exit')
 
 
 def generate_snapshots(fname, igv, reference, bam_files, flank_size, outdir,
-        snps_only=None, indels_only=None):
+                       snps_only=None, indels_only=None):
     '''
     use temporary batch script to run IGV
 
@@ -122,22 +137,26 @@ def generate_snapshots(fname, igv, reference, bam_files, flank_size, outdir,
     try:
         assert os.path.isfile(fname_batch)
     except:
-        print('[saltMA] ERROR: the batch script has not been written')
-        print('[saltMA] Something has gone terribly wrong. Exiting...')
+        print('[saltMA] ERROR: the batch script does not exist')
+        print('[saltMA] something has gone terribly wrong. Exiting...')
         raise FileNotFoundError()
 
     print('[saltMA] running IGV with batch script...')
-    print('[saltMA] you will be hearing from IGV instead of me for a bit.')
     if not igv.startswith('./'):
         igv = './' + igv
-    subprocess.Popen('{} --batch {}'.format(igv, fname_batch), 
+    t0 = time.time()
+    proc = subprocess.Popen([igv, '--batch', fname_batch],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    out, err = proc.communicate()
 
-    print('[saltMA] back to me - if this message showed up immediately...')
-    print('[saltMA] ...chances are you do not have an Xvfb server running.')
-    print('[saltMA] deleting temp batch script...')
+    t1 = time.time()
+    if t1 - t0 < 5:
+        print('[saltMA] IGV finished awful quick -')
+        print('[saltMA] chances are you do not have an Xvfb server running.')
+        print('[saltMA] double check to see output has been generated')
+    print('[saltMA] screenshotting complete - deleting temp batch script...')
     os.remove(fname_batch)
-    print('[saltMA] done! results written to {}. exiting...'.format(outdir))
+    print('[saltMA] results written to {}. exiting...'.format(outdir))
 
 
 def main():

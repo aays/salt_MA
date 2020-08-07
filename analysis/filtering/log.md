@@ -415,6 +415,198 @@ the batch script)
 alright, script (`mutation_snapshots.py`) looks good - test this tomorrow morning
 (lol it's 1 am... I got really into this)
 
+## 5/8/2020
+
+giving the script a shot:
+
+```bash
+mkdir -p data/mutations/screenshots/CC1373
+
+time python3.5 analysis/filtering/mutation_snapshots.py \
+--fname data/mutations/gq_tests/pairs_20/CC1373_GQ20.txt \
+--igv bin/igv.sh \
+--reference data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+--bam_files data/alignments/bam/CC1373_0.bam data/alignments/bam/CC1373_5.bam \
+--flank_size 50 \
+--outdir data/mutations/screenshots/CC1373
+```
+
+looks good! 
+
+queuing this for all of them:
+
+```bash
+time while read sample; do
+    mkdir -p data/mutations/screenshots/${sample}
+    time python3.5 analysis/filtering/mutation_snapshots.py \
+    --fname data/mutations/gq_tests/pairs_20/${sample}_GQ20.txt \
+    --igv bin/igv.sh \
+    --reference data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+    --bam_files data/alignments/bam/${sample}_0.bam data/alignments/bam/${sample}_5.bam \
+    --flank_size 50 \
+    --outdir data/mutations/screenshots/${sample}
+done < data/alignments/fastq/symlinks/samples.txt
+```
+
+all done - took 47 minutes too, which isn't bad at all
+
+some issues - need to get the DL41/46 ones going manually, since they weren't
+included in the `samples` file, while SL26 (predictably) failed since there
+aren't any muts given the missing line
+
+```bash
+mkdir -p data/mutations/screenshots/DL41_46
+mkdir -p data/mutations/screenshots/DL46_41
+
+time python3.5 analysis/filtering/mutation_snapshots.py \
+--fname data/mutations/gq_tests/pairs_20/DL41_46_GQ20.txt \
+--igv bin/igv.sh \
+--reference data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+--bam_files data/alignments/bam/DL41_0.bam data/alignments/bam/DL46_5.bam \
+--flank_size 50 \
+--outdir data/mutations/screenshots/DL41_46
+
+time python3.5 analysis/filtering/mutation_snapshots.py \
+--fname data/mutations/gq_tests/pairs_20/DL46_41_GQ20.txt \
+--igv bin/igv.sh \
+--reference data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+--bam_files data/alignments/bam/DL46_0.bam data/alignments/bam/DL41_5.bam \
+--flank_size 50 \
+--outdir data/mutations/screenshots/DL46_41
+```
+
+looks good - next up, need to make a csv with all the mutations in the
+`pairs_20` dir and make... a spreadsheet out of them?? something to make
+comments (or even some 'approved' mark on) for later reference
+
+creating the csv:
+
+```bash
+head -n 1 $(ls -tr | head -n 1) > mutations_GQ20.tsv
+for fname in *txt; do
+    tail -n +2 ${fname} >> mutations_GQ20.tsv;
+done
+```
+
+making snp only version:
+
+```python
+>>> import csv
+>>> fname = 'mutations_GQ20.tsv'
+>>> outname = 'mutations_GQ20_snps.tsv'
+>>> from tqdm import tqdm
+  2 with open(fname, 'r', newline='') as f_in:
+  3     reader = csv.DictReader(f_in, delimiter='\t')
+  4     fieldnames = reader.fieldnames
+  5     with open(outname, 'w', newline='') as f_out:
+  6         writer = csv.DictWriter(f_out, fieldnames=fieldnames, delimiter='\t')
+  7         writer.writeheader()
+  8         for record in tqdm(reader):
+  9             alt = eval(record['alt'])
+ 10             max_alt_length = max([len(s) for s in alt])
+ 11             if max_alt_length == 1:
+ 12                 writer.writerow(record)
+```
+
+all done - now to go through these screenshots one by one for any SNPs where 20 < min GQ < 30
+
+to make this a bit easier, going to actually split the GQ values into two columns:
+
+```python
+>>> import csv
+>>> fname = 'mutations_GQ20_snps.tsv'
+>>> outname = 'mutations_GQ20_snps_split.tsv'
+>>> from tqdm import tqdm
+>>> with open(fname, 'r', newline='') as f_in:
+  2     reader = csv.DictReader(f_in, delimiter='\t')
+  3     fieldnames = reader.fieldnames
+  4     fieldnames.extend(['GQ1', 'GQ2'])
+  5     with open(outname, 'w', newline='') as f_out:
+  6         writer = csv.DictWriter(f_out, fieldnames=fieldnames, delimiter='\t')
+  7         writer.writeheader()
+  8         for record in tqdm(reader):
+  9             quals = eval(record['gt_quals'])
+ 10             gt1_qual, gt2_qual = quals
+ 11             line_out = record
+ 12             removed = line_out.pop('gt_quals')
+ 13             line_out['GQ1'] = gt1_qual
+ 14             line_out['GQ2'] = gt2_qual
+ 15             writer.writerow(record)
+```
+
+wait - the above code (and the IGV screenshots) didn't consider
+that some indel records have `len(ref)` > 1, while the alts are just
+single bases - goddamn it
+
+```python
+import csv
+fname = 'mutations_GQ20.tsv'
+outname = 'mutations_GQ20_snps.tsv'
+from tqdm import tqdm
+with open(fname, 'r', newline='') as f_in:
+    reader = csv.DictReader(f_in, delimiter='\t')
+    fieldnames = reader.fieldnames
+    fieldnames.extend(['GQ1', 'GQ2'])
+    with open(outname, 'w', newline='') as f_out:
+        writer = csv.DictWriter(f_out, fieldnames=fieldnames, delimiter='\t')
+        writer.writeheader()
+        for record in tqdm(reader):
+            alt = eval(record['alt'])
+            max_alt_length = max([len(s) for s in alt])
+            if max_alt_length == 1 and len(record['ref']) == 1:
+                line_out = record
+                line_out['GQ1'], line_out['GQ2'] = eval(record['gt_quals'])
+                writer.writerow(line_out)
+
+```
+
+running the IGV script again after fixing the snp bug:
+
+```bash
+export DISPLAY=:1
+./bin/Xvfb :1 -nolisten tcp -fp /home/hasans11/apps/lib/X11/fonts/misc
+
+# in separate shell with above server running
+time while read sample; do
+    if [ ${sample} != "DL41" ] && [ ${sample} != "DL46" ]; then
+        mkdir -p data/mutations/screenshots/${sample}
+        time python3.5 analysis/filtering/mutation_snapshots.py \
+        --fname data/mutations/gq_tests/pairs_20/${sample}_GQ20.txt \
+        --igv bin/igv.sh \
+        --reference data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+        --bam_files data/alignments/bam/${sample}_0.bam data/alignments/bam/${sample}_5.bam \
+        --flank_size 50 \
+        --outdir data/mutations/screenshots/${sample}
+    fi
+done < data/alignments/fastq/symlinks/samples.txt
+
+mkdir -p data/mutations/screenshots/DL41_46
+mkdir -p data/mutations/screenshots/DL46_41
+
+time python3.5 analysis/filtering/mutation_snapshots.py \
+--fname data/mutations/gq_tests/pairs_20/DL41_46_GQ20.txt \
+--igv bin/igv.sh \
+--reference data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+--bam_files data/alignments/bam/DL41_0.bam data/alignments/bam/DL46_5.bam \
+--flank_size 50 \
+--outdir data/mutations/screenshots/DL41_46
+
+time python3.5 analysis/filtering/mutation_snapshots.py \
+--fname data/mutations/gq_tests/pairs_20/DL46_41_GQ20.txt \
+--igv bin/igv.sh \
+--reference data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+--bam_files data/alignments/bam/DL46_0.bam data/alignments/bam/DL41_5.bam \
+--flank_size 50 \
+--outdir data/mutations/screenshots/DL46_41
+```
+
+# 7/8/2020
+
+now that this is done - will open the tsv in Excel (shudder)
+and start manually inspecting + giving a pass/fail to
+all mutations where 20 < min(GQ) < 30
+
+
 
 
 
