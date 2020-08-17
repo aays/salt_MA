@@ -600,11 +600,176 @@ time python3.5 analysis/filtering/mutation_snapshots.py \
 --outdir data/mutations/screenshots/DL46_41
 ```
 
-# 7/8/2020
+## 7/8/2020
 
 now that this is done - will open the tsv in Excel (shudder)
 and start manually inspecting + giving a pass/fail to
 all mutations where 20 < min(GQ) < 30
+
+## 16/8/2020
+
+so one week, one dead laptop, and one new laptop later - time to do this
+for indels using the HC VCFs
+
+first, need to create a similar tsv to the ones in `pairs_20` containing
+locations of indels and other info:
+
+```bash
+mkdir -p data/mutations/gq_tests/HC_pairs_20
+
+time for fname in data/alignments/genotyping/HC/pairs/*vcf.gz; do
+    if [ "${sample}" != "DL41" ] && [ "${sample}" != "DL46" ]; then
+        base=$(basename ${fname} _samples.vcf.gz)
+        time python3.5 analysis/filtering/filter_candidate_muts.py \
+        --vcf ${fname} --gq 20 --vcf_type pairs --verbose_level 1 \
+        --out_format table --out data/mutations/gq_tests/HC_pairs_20/${base}_GQ20.txt;
+    fi;
+done
+```
+
+need to also create `DL41_46` and `DL46_41` VCFs using HC:
+
+```bash
+time java -jar ./bin/GenomeAnalysisTK.jar \
+-T HaplotypeCaller \
+-R data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+-I data/alignments/bam/DL41_0.bam \
+-I data/alignments/bam/DL46_5.bam \
+-ploidy 2 \
+--output_mode EMIT_ALL_SITES \
+--heterozygosity 0.02 \
+--indel_heterozygosity 0.002 \
+-o data/alignments/genotyping/HC/pairs/DL41_46.vcf
+
+time java -jar ./bin/GenomeAnalysisTK.jar \
+-T HaplotypeCaller \
+-R data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+-I data/alignments/bam/DL46_0.bam \
+-I data/alignments/bam/DL41_5.bam \
+-ploidy 2 \
+--output_mode EMIT_ALL_SITES \
+--heterozygosity 0.02 \
+--indel_heterozygosity 0.002 \
+-o data/alignments/genotyping/HC/pairs/DL46_41.vcf
+
+bgzip data/alignments/genotyping/HC/pairs/DL41_46.vcf
+bgzip data/alignments/genotyping/HC/pairs/DL46_41.vcf
+tabix -p vcf data/alignments/genotyping/HC/pairs/DL41_46.vcf.gz
+tabix -p vcf data/alignments/genotyping/HC/pairs/DL46_41.vcf.gz
+
+# including the weird DLs
+time python3.5 analysis/filtering/filter_candidate_muts.py \
+--vcf data/alignments/genotyping/HC/pairs/DL41_46.vcf.gz \
+--gq 20 --vcf_type pairs --verbose_level 1 \
+--out_format table --out data/mutations/gq_tests/HC_pairs_20/DL41_46_GQ20.txt
+
+time python3.5 analysis/filtering/filter_candidate_muts.py \
+--vcf data/alignments/genotyping/HC/pairs/DL46_41.vcf.gz \
+--gq 20 --vcf_type pairs --verbose_level 1 \
+--out_format table --out data/mutations/gq_tests/HC_pairs_20/DL46_41_GQ20.txt
+```
+
+once this is done, prepping a tsv for the spreadsheet:
+
+```bash
+cd data/mutations/gq_tests/HC_pairs_20/
+head -n 1 $(ls -tr | head -n 1) > mutations_HC_GQ20.tsv
+for fname in *txt; do
+    tail -n +2 ${fname} >> mutations_HC_GQ20.tsv;
+done
+```
+
+splitting the GQ values into two columns:
+
+```python
+import csv
+from tqdm import tqdm
+fname = 'mutations_HC_GQ20.tsv'
+outname = 'mutations_HC_GQ20_split.tsv'
+with open(fname, 'r', newline='') as f_in:
+    reader = csv.DictReader(f_in, delimiter='\t')
+    fieldnames = reader.fieldnames
+    fieldnames.extend(['GQ1', 'GQ2'])
+    with open(outname, 'w', newline='') as f_out:
+        writer = csv.DictWriter(f_out, fieldnames=fieldnames, delimiter='\t')
+        writer.writeheader()
+        for record in tqdm(reader):
+            quals = eval(record['gt_quals'])
+            gt1_qual, gt2_qual = quals
+            line_out = record
+            removed = line_out.pop('gt_quals')
+            line_out['GQ1'], line_out['GQ2'] = gt1_qual, gt2_qual
+            writer.writerow(record)
+```
+
+going to leave both snps and indels in here - it'll be useful
+to actually compare this with the UG snps to look for overlaps/differences
+
+let's make an indels version as well though:
+
+```python
+import csv
+from tqdm import tqdm
+fname = 'mutations_HC_GQ20_split.tsv'
+outname = 'mutations_HC_GQ20_indels.tsv'
+with open(fname, 'r', newline='') as f_in:
+    reader = csv.DictReader(f_in, delimiter='\t')
+    fieldnames = reader.fieldnames
+    with open(outname, 'w', newline='') as f_out:
+        writer = csv.DictWriter(f_out, fieldnames=fieldnames, delimiter='\t')
+        writer.writeheader()
+        for record in tqdm(reader):
+            alt = eval(record['alt'])
+            max_alt_length = max([len(s) for s in alt])
+            if max_alt_length > 1 or len(record['ref']) > 1:
+                line_out = record
+                writer.writerow(line_out)
+```
+
+and now for the screenshotting:
+
+```bash
+export DISPLAY=:1
+./bin/Xvfb :1 -nolisten tcp -fp /home/hasans11/apps/lib/X11/fonts/misc
+
+# in separate shell with above server running
+mkdir -p data/mutations/HC_screenshots
+
+time while read sample; do
+    if [ "${sample}" != "DL41" ] && [ "${sample}" != "DL46" ]; then
+        mkdir -p data/mutations/HC_screenshots/${sample}
+        time python3.5 analysis/filtering/mutation_snapshots.py \
+        --fname data/mutations/gq_tests/HC_pairs_20/${sample}_GQ20.txt \
+        --igv bin/igv.sh \
+        --reference data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+        --bam_files data/alignments/bam/${sample}_0.bam data/alignments/bam/${sample}_5.bam \
+        --flank_size 50 --outdir data/mutations/HC_screenshots/${sample}
+    fi
+done < data/alignments/fastq/symlinks/samples.txt
+
+# weird DL samples
+mkdir -p data/mutations/HC_screenshots/DL41_46
+mkdir -p data/mutations/HC_screenshots/DL46_41
+
+time python3.5 analysis/filtering/mutation_snapshots.py \
+--fname data/mutations/gq_tests/HC_pairs_20/DL41_46_GQ20.txt \
+--igv bin/igv.sh \
+--reference data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+--bam_files data/alignments/bam/DL41_0.bam data/alignments/bam/DL46_5.bam \
+--flank_size 50 --outdir data/mutations/HC_screenshots/DL41_46
+
+time python3.5 analysis/filtering/mutation_snapshots.py \
+--fname data/mutations/gq_tests/HC_pairs_20/DL46_41_GQ20.txt \
+--igv bin/igv.sh \
+--reference data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+--bam_files data/alignments/bam/DL46_0.bam data/alignments/bam/DL41_5.bam \
+--flank_size 50 --outdir data/mutations/HC_screenshots/DL46_41
+```
+
+tomorrow: 
+
+- import spreadsheet into google sheets and then get to inspecting indels
+- do quick check of overlap b/w UG and HC variants (overall numbers, and then shared sites etc)
 
 
 

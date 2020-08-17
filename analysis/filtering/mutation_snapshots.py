@@ -153,6 +153,7 @@ def generate_snapshots(fname, igv, reference, bam_files, flank_size, outdir,
     if t1 - t0 < 5:
         print('[saltMA] IGV finished awful quick -')
         print('[saltMA] chances are you do not have an Xvfb server running.')
+        print('[saltMA] either that or no DISPLAY variable is set.')
         print('[saltMA] double check to see output has been generated')
     print('[saltMA] screenshotting complete - deleting temp batch script...')
     os.remove(fname_batch)

@@ -1780,6 +1780,22 @@ $ wc -l data/alignments/genotyping/UG/DL_test/*txt
 
 ## 20/7/2020
 
-trying haplotypecaller again with the `EMIT_REF_CONFIDENCE` option to see if that
-affects anything
+trying haplotypecaller again with the `--emitRefConfidence` option to see if that
+affects anything - though it seems to only work on one sample at a time
+
+testing:
+
+```bash
+time java -jar ./bin/GenomeAnalysisTK.jar \
+        -T HaplotypeCaller \
+        -R data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+        -I data/alignments/bam/CC1373_0.bam \
+        -L chromosome_1 \
+        -ploidy 2 \
+        --emitRefConfidence BP_RESOLUTION \
+        --output_mode EMIT_ALL_SITES \ 
+        --heterozygosity 0.02 \
+        --indel_heterozygosity 0.002 \
+        -o test.vcf
+```
 
