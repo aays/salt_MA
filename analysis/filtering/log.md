@@ -771,10 +771,258 @@ tomorrow:
 - import spreadsheet into google sheets and then get to inspecting indels
 - do quick check of overlap b/w UG and HC variants (overall numbers, and then shared sites etc)
 
+## 17/8/2020
 
+checking overlap b/w UG and HC variants
 
+```bash
+$ wc -l data/mutations/gq_tests/pairs_20/*txt
+   22 data/mutations/gq_tests/pairs_20/CC1373_GQ20.txt
+   12 data/mutations/gq_tests/pairs_20/CC1952_GQ20.txt
+    7 data/mutations/gq_tests/pairs_20/CC2342_GQ20.txt
+   14 data/mutations/gq_tests/pairs_20/CC2344_GQ20.txt
+   24 data/mutations/gq_tests/pairs_20/CC2931_GQ20.txt
+   13 data/mutations/gq_tests/pairs_20/CC2935_GQ20.txt
+   17 data/mutations/gq_tests/pairs_20/CC2937_GQ20.txt
+   82 data/mutations/gq_tests/pairs_20/DL40_GQ20.txt
+   27 data/mutations/gq_tests/pairs_20/DL41_46_GQ20.txt
+   29 data/mutations/gq_tests/pairs_20/DL46_41_GQ20.txt
+   86 data/mutations/gq_tests/pairs_20/DL51_GQ20.txt
+   25 data/mutations/gq_tests/pairs_20/DL53_GQ20.txt
+   31 data/mutations/gq_tests/pairs_20/DL55_GQ20.txt
+   39 data/mutations/gq_tests/pairs_20/DL57_GQ20.txt
+   41 data/mutations/gq_tests/pairs_20/DL58_GQ20.txt
+  117 data/mutations/gq_tests/pairs_20/SL27_GQ20.txt
+    1 data/mutations/gq_tests/pairs_20/SL29_GQ20.txt
+  587 total
 
+$ wc -l data/mutations/gq_tests/HC_pairs_20/*txt
+   31 data/mutations/gq_tests/HC_pairs_20/CC1373_GQ20.txt
+   12 data/mutations/gq_tests/HC_pairs_20/CC1952_GQ20.txt
+   12 data/mutations/gq_tests/HC_pairs_20/CC2342_GQ20.txt
+   44 data/mutations/gq_tests/HC_pairs_20/CC2344_GQ20.txt
+   46 data/mutations/gq_tests/HC_pairs_20/CC2931_GQ20.txt
+   15 data/mutations/gq_tests/HC_pairs_20/CC2935_GQ20.txt
+   36 data/mutations/gq_tests/HC_pairs_20/CC2937_GQ20.txt
+   14 data/mutations/gq_tests/HC_pairs_20/DL40_GQ20.txt
+   31 data/mutations/gq_tests/HC_pairs_20/DL41_46_GQ20.txt
+   36 data/mutations/gq_tests/HC_pairs_20/DL46_41_GQ20.txt
+  112 data/mutations/gq_tests/HC_pairs_20/DL51_GQ20.txt
+   32 data/mutations/gq_tests/HC_pairs_20/DL53_GQ20.txt
+   34 data/mutations/gq_tests/HC_pairs_20/DL55_GQ20.txt
+   51 data/mutations/gq_tests/HC_pairs_20/DL57_GQ20.txt
+   47 data/mutations/gq_tests/HC_pairs_20/DL58_GQ20.txt
+   20 data/mutations/gq_tests/HC_pairs_20/SL27_GQ20.txt
+    3 data/mutations/gq_tests/HC_pairs_20/SL29_GQ20.txt
+  576 total
+```
 
+immediate observations -
+- there's some minor variation b/w the two, but HC has less total
+- SL27 - which has huge stretches of mutations in the UG dataset - has much fewer in the HC dataset
+
+need to do a more in depth investigation of overlap in python later - but onto
+looking at screenshots for now
+
+nts: accidentally let DL41 and DL46 into the table formatted file - had to remove these
+with grep (since `DL41_46` and `DL46_41` should be used instead) 
+
+## 17/9/2020
+
+been a while! 
+
+let's start with a quick overlap analysis:
+
+```r
+library(tidyverse)
+d_ug <- read_tsv('pairs_20/mutations_GQ20_snps.tsv', col_types = cols())
+d_hc <- read_tsv('HC_pairs_20/mutations_HC_GQ20_snps.tsv', col_types = cols()) %>%
+    mutate(fname = ifelse(
+        str_detect(fname, 'DL4[0-9]_4[0-9]'), paste0(fname, '_samples'), fname))
+shared <- d_ug %>% select(fname, chrom, pos) %>%
+    inner_join(select(d_hc, fname, chrom, pos))
+dim(shared) # 137 rows
+dim(d_ug); dim(d_hc) # 340 and 194 respectively
+
+# checking variation across files:
+shared %>% group_by(fname) %>% summarise(n = n())
+# A tibble: 16 x 2
+   fname               n
+   <chr>           <int>
+ 1 CC1373_samples     10
+ 2 CC1952_samples      5
+ 3 CC2342_samples      5
+ 4 CC2344_samples      7
+ 5 CC2931_samples      5
+ 6 CC2935_samples      8
+ 7 CC2937_samples      7
+ 8 DL40_samples        6
+ 9 DL41_46_samples     9
+10 DL46_41_samples     2
+11 DL51_samples       29
+12 DL53_samples        9
+13 DL55_samples       11
+14 DL57_samples        9
+15 DL58_samples       10
+16 SL27_samples        6
+```
+
+seems all samples that had at least one mutation had a shared mutation
+between both samples - which is something
+
+checking this against how many mutations there were in total per
+filename:
+
+```r
+shared %>% group_by(fname) %>% summarise(n = n()) %>%
+left_join(d_ug %>% group_by(fname) %>% summarise(n_ug = n())) %>%
+left_join(d_hc %>% group_by(fname) %>% summarise(n_hc = n()))
+
+   fname               n  n_ug  n_hc
+   <chr>           <int> <int> <int>
+ 1 CC1373_samples     10    10    30
+ 2 CC1952_samples      5     7    11
+ 3 CC2342_samples      5     5    11
+ 4 CC2344_samples      7     8    43
+ 5 CC2931_samples      5     6    45
+ 6 CC2935_samples      8     8    14
+ 7 CC2937_samples      7    10    35
+ 8 DL40_samples        6    77    13
+ 9 DL41_46_samples     9    10    30
+10 DL46_41_samples     2     3    35
+11 DL51_samples       29    33   111
+12 DL53_samples        9    10    31
+13 DL55_samples       11    12    33
+14 DL57_samples        9    11    50
+15 DL58_samples       10    15    46
+16 SL27_samples        6   115    19
+
+```
+
+seems that save for the mess that is SL27, HC has more mutations
+per sample overall and that there are at least a few samples
+(esp in the case of the CC strains) where all UG mutations
+were also called by HC
+
+wait shit - this HC file isn't just SNPs like the UG file is
+
+gotta make that real quick - code from earlier:
+
+```python
+import csv
+fname = 'mutations_HC_GQ20.tsv'
+outname = 'mutations_HC_GQ20_snps.tsv'
+from tqdm import tqdm
+with open(fname, 'r', newline='') as f_in:
+    reader = csv.DictReader(f_in, delimiter='\t')
+    fieldnames = reader.fieldnames
+    fieldnames.extend(['GQ1', 'GQ2'])
+    with open(outname, 'w', newline='') as f_out:
+        writer = csv.DictWriter(f_out, fieldnames=fieldnames, delimiter='\t')
+        writer.writeheader()
+        for record in tqdm(reader):
+            alt = eval(record['alt'])
+            max_alt_length = max([len(s) for s in alt])
+            if max_alt_length == 1 and len(record['ref']) == 1:
+                line_out = record
+                line_out['GQ1'], line_out['GQ2'] = eval(record['gt_quals'])
+                writer.writerow(line_out)
+```
+
+updated the dimensions in the bit above, but here's the new filename
+report:
+
+```r
+shared %>% group_by(fname) %>% count()
+# A tibble: 16 x 2
+# Groups:   fname [16]
+   fname               n
+   <chr>           <int>
+ 1 CC1373_samples     10
+ 2 CC1952_samples      5
+ 3 CC2342_samples      5
+ 4 CC2344_samples      7
+ 5 CC2931_samples      5
+ 6 CC2935_samples      7
+ 7 CC2937_samples      7
+ 8 DL40_samples        6
+ 9 DL41_46_samples     9
+10 DL46_41_samples     2
+11 DL51_samples       29
+12 DL53_samples        9
+13 DL55_samples       11
+14 DL57_samples        9
+15 DL58_samples       10
+16 SL27_samples        6
+```
+
+seems a CC2935 mutation is now no longer shared? weird that that
+was eliminated when I removed indels... will have to look into that one again
+
+here's the file comparison again:
+
+```r
+# A tibble: 16 x 4
+# Groups:   fname [16]
+   fname               n  n_ug  n_hc
+   <chr>           <int> <int> <int>
+ 1 CC1373_samples     10    10    13
+ 2 CC1952_samples      5     7     5
+ 3 CC2342_samples      5     5     6
+ 4 CC2344_samples      7     8    14
+ 5 CC2931_samples      5     6    14
+ 6 CC2935_samples      7     8     8
+ 7 CC2937_samples      7    10    14
+ 8 DL40_samples        6    77     7
+ 9 DL41_46_samples     9    10     9
+10 DL46_41_samples     2     3     3
+11 DL51_samples       29    33    37
+12 DL53_samples        9    10    11
+13 DL55_samples       11    12    13
+14 DL57_samples        9    11    12
+15 DL58_samples       10    15    13
+16 SL27_samples        6   115    15
+```
+
+overall numbers look a lot closer - which is really promising! especially
+considering I'm looking for exact matches here
+
+gonna have to look into this mystery CC2935 mutation next...
+
+```r
+> left_join(d_ug %>% select(fname, chrom, pos), d_hc_full %>% select(fname, chrom, pos)) %>%
++ filter(fname == 'CC2935_samples')
+# A tibble: 8 x 3
+  fname          chrom             pos
+  <chr>          <chr>           <dbl>
+1 CC2935_samples chromosome_6  6423831
+2 CC2935_samples chromosome_8  4202087
+3 CC2935_samples chromosome_9  7390928
+4 CC2935_samples chromosome_11 3562572
+5 CC2935_samples chromosome_13 1650911
+6 CC2935_samples chromosome_13 3465246
+7 CC2935_samples mtDNA             732
+8 CC2935_samples mtDNA            8627
+> shared %>% filter(fname == 'CC2935_samples')
+# A tibble: 7 x 3
+  fname          chrom             pos
+  <chr>          <chr>           <dbl>
+1 CC2935_samples chromosome_8  4202087
+2 CC2935_samples chromosome_9  7390928
+3 CC2935_samples chromosome_11 3562572
+4 CC2935_samples chromosome_13 1650911
+5 CC2935_samples chromosome_13 3465246
+6 CC2935_samples mtDNA             732
+7 CC2935_samples mtDNA            8627
+```
+
+figured it out - the 'mutation' at `chromosome_6:6423831` is a SNP
+in the UG file, but an indel in the HC file - since I was only looking
+at fname, chrom, and pos, R found an overlap 
+
+overall, 137 of the 194 HC mutations being supported by UG is a good sign - 
+there are more mutations in UG (340), but I wonder how much that number is
+inflated by the SL27 mutations
 
 
 
