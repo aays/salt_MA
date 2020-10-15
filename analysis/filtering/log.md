@@ -1024,6 +1024,133 @@ overall, 137 of the 194 HC mutations being supported by UG is a good sign -
 there are more mutations in UG (340), but I wonder how much that number is
 inflated by the SL27 mutations
 
+## 11/10/2020
+
+today: need to add screenshots + create a spreedsheet for mutations
+w/ GQ b/w 10 and 20 (well, 19)
+
+given how the filtering script works, I'll have to create a full
+dataset with GQ >= 10 and then filter mutations where both samples
+are above GQ20 after the fact - ideally I'd keep these all together,
+but it doesn't make a lot of sense to re-screenshot a bunch of
+files that have already been screenshotted + evaluated
+
+```bash
+mkdir data/mutations/gq_tests/pairs_10
+mkdir data/mutations/gq_tests/pairs_10/filtered
+
+# this includes the weird DL lines
+time for fname in data/alignments/genotyping/UG/pairs/*vcf.gz; do
+    base=$(basename ${fname} _samples.vcf.gz)
+    time python3.5 analysis/filtering/filter_candidate_muts.py \
+    --vcf ${fname} --gq 10 --vcf_type pairs --verbose_level 1 \
+    --out_format table --out data/mutations/gq_tests/pairs_10/${base}_GQ10.txt
+done # takes 2 hours
+
+mkdir -p data/mutations/screenshots_GQ10
+```
+
+## 13/10/2020
+
+filtering the GQ10 files to only include new mutations where GQ is b/w 10-19 for one or both
+of the calls:
+
+```python
+import csv
+from tqdm import tqdm
+from glob import glob
+fnames = glob('data/mutations/gq_tests/pairs_10/*txt')
+
+def file_filter(fname):
+    with open(fname, 'r') as f_in:
+        reader = csv.DictReader(f_in, delimiter='\t')
+        fieldnames = reader.fieldnames
+        outname = fname.replace('_10/', '_10/filtered/')
+        with open(outname, 'w') as f_out:
+            writer = csv.DictWriter(f_out, fieldnames=fieldnames, delimiter='\t')
+            writer.writeheader()
+            print(fname)
+            for line in tqdm(reader):
+                quals = eval(line['gt_quals'])
+                if any([qual < 20 for qual in quals]):
+                    writer.writerow(line)
+
+for fname in tqdm(fnames):
+    file_filter(fname)
+```
+
+looks good - screenshot time:
+
+```bash
+export DISPLAY=:1
+./bin/Xvfb :1 -nolisten tcp -fp /home/hasans11/apps/lib/X11/fonts/misc
+
+# in separate shell with above server running
+time while read sample; do
+    if [ ${sample} != "DL41" ] && [ ${sample} != "DL46" ]; then
+        mkdir -p data/mutations/screenshots_GQ10/${sample}
+        time python3.5 analysis/filtering/mutation_snapshots.py \
+        --fname data/mutations/gq_tests/pairs_10/filtered/${sample}_GQ10.txt \
+        --igv bin/igv.sh \
+        --reference data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+        --bam_files data/alignments/bam/${sample}_0.bam data/alignments/bam/${sample}_5.bam \
+        --flank_size 50 \
+        --outdir data/mutations/screenshots_GQ10/${sample}
+    fi
+done < data/alignments/fastq/symlinks/samples.txt
+
+mkdir -p data/mutations/screenshots_GQ10/DL41_46
+mkdir -p data/mutations/screenshots_GQ10/DL46_41
+
+time python3.5 analysis/filtering/mutation_snapshots.py \
+--fname data/mutations/gq_tests/pairs_10/DL41_46_GQ10.txt \
+--igv bin/igv.sh \
+--reference data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+--bam_files data/alignments/bam/DL41_0.bam data/alignments/bam/DL46_5.bam \
+--flank_size 50 \
+--outdir data/mutations/screenshots_GQ10/DL41_46
+
+time python3.5 analysis/filtering/mutation_snapshots.py \
+--fname data/mutations/gq_tests/pairs_10/DL46_41_GQ10.txt \
+--igv bin/igv.sh \
+--reference data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+--bam_files data/alignments/bam/DL46_0.bam data/alignments/bam/DL41_5.bam \
+--flank_size 50 \
+--outdir data/mutations/screenshots_GQ10/DL46_41
+```
+
+done in an hour - now to make a spreadsheet for these mutations:
+
+```bash
+# in data/mutations/gq_tests/pairs_10/filtered
+head -n 1 $(ls -tr | head -n 1) > mutations_GQ10.tsv
+for fname in *txt; do
+    tail -n +2 ${fname} >> mutations_GQ10.tsv;
+done
+```
+
+SNP only version:
+
+```python
+import csv
+fname = 'mutations_GQ20.tsv'
+outname = 'mutations_GQ20_snps.tsv'
+from tqdm import tqdm
+with open(fname, 'r', newline='') as f_in:
+    reader = csv.DictReader(f_in, delimiter='\t')
+    fieldnames = reader.fieldnames
+    fieldnames.extend(['GQ1', 'GQ2'])
+    with open(outname, 'w', newline='') as f_out:
+        writer = csv.DictWriter(f_out, fieldnames=fieldnames, delimiter='\t')
+        writer.writeheader()
+        for record in tqdm(reader):
+            alt = eval(record['alt'])
+            max_alt_length = max([len(s) for s in alt])
+            if max_alt_length == 1 and len(record['ref']) == 1:
+                line_out = record
+                line_out['GQ1'], line_out['GQ2'] = eval(record['gt_quals'])
+                writer.writerow(line_out)
+```
 
 
 
