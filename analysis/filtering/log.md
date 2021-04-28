@@ -1152,11 +1152,214 @@ with open(fname, 'r', newline='') as f_in:
                 writer.writerow(line_out)
 ```
 
+## 23/3/2021
 
+finally back on this! 
 
+first order of business - creating a mutation table from the ones
+that we know are good to go - e.g. all the ones above GQ20 and
+those that Rob has okayed in the GQ10-20 spreadsheet
 
+there are three sets here:
 
+1. mutations where both were >GQ30 (autopassed)
+2. mutations where one mut is 10-20 (most passed, need to go through spreadsheet)
+3. mutations where both are 10-20 (only a few passed, need to go through spreadsheet)
 
+for category 2, there are lots in DL40 and SL27 in particular where one mut is
+99 and the other is very low - Rob has labelled these are likely being not
+real, though a handful are also supported by HC - might need to revisit that
+later on
+
+for now though, need to assemble a table of 1, passing muts in 2 (export
+from Drive spreadsheet), and passing muts in 3 (export from spreadsheet
+as well)
+
+there are some in the spreadsheet for 3 that likely require realignment - 
+need to talk to Rob about best way to approach this (getting HC to specifically
+realign these regions?) also need to go through ms methods once more to
+refresh memory on how these were handled in previous datasets - consistency 
+is also good and important! 
+
+## 25/3/2021
+
+today: getting the updated >GQ20 spreadsheet on the server and extracting
+the 'confirmed' mutations
+
+just leaving the file (`mutations_GQ20_snps_reviewed.tsv`) in the parent data directory for now
+
+```bash
+mkdir -p data/mutations/filtered
+```
+
+## 13/4/2021
+
+so I dropped the ball on that - will get back to it at some point, but first I need
+to get a count of >GQ30 mutations for my committee report
+
+I need to add the `DL41_46` and `46_41` SNPs to `first_pass_pairs` though - that
+hasn't been updated yet
+
+here's what I ran back then:
+
+```bash
+time for fname in data/alignments/genotyping/UG/pairs/*vcf.gz; do
+    base=$(basename ${fname} _samples.vcf.gz)
+    time python3.5 analysis/filtering/filter_candidate_muts.py \
+    --vcf ${fname} \
+    --out_format table \
+    --out data/mutations/first_pass_pairs/${base}_UG_pairs.txt;
+done
+```
+
+might actually rerun this entirely given that I believe these
+were done with the purity filter on (and there were a few 
+other args added since)
+
+```bash
+mkdir -p data/mutations/gq_tests/pairs_30
+time for fname in data/alignments/genotyping/UG/pairs/*vcf.gz; do
+    base=$(basename ${fname} _samples.vcf.gz)
+    time python3.5 analysis/filtering/filter_candidate_muts.py \
+    --vcf ${fname} --gq 30 --vcf_type pairs --verbose_level 1 \
+    --out_format table --out data/mutations/gq_tests/pairs_30/${base}_GQ30.txt
+done
+```
+
+probably need to also generate 'combined' (eg all ancestral samples + the given pair)
+files for DL41/46 - holding off on this for now though, since after mutation
+filtering we'll probably only be interested in a subset (and mutation filtering
+actually needs to be completed first before I end up focusing on other things...)
+
+done in 2 hours - let's get a count of strains and of high quality mutations:
+
+```bash
+wc -l data/mutations/gq_tests/pairs_30/*
+```
+ 
+the other thing I need to do is get trimming stats out (to help debug weird
+mutation clusters) - since these weren't saved the first time (!) I might need
+to rerun that again with the same command I used earlier, but this time
+actually explicitly saving the logs...
+
+## 26/4/2021
+
+today - listing out regions that I need to manually realign to try and 'solve'
+
+these are from the variants labelled '2' in `mutations_GQ20_snps.tsv`
+
+```
+CC2937 chromosome_5 377471
+CC2937 chromosome_9 2314036
+DL51 chromosome_11 2143294
+DL51 chromosome_11 2143301
+DL51 chromosome_11 2143306
+DL58 chromosome_2 4729387
+```
+
+a few of the '2' variants are actually called correctly in the HC data - will
+need to manually amend final dataset to include these
+
+```
+CC2931 chromosome_1 915925 # 'solved' with HC indel call
+DL58 chromosome_16 4380945 # missing in UG data
+```
+
+alright - time for some local realignments - this seems like it'd belong in
+the alignment log, but I guess it's still part of filtering overall
+
+from Josianne's draft:
+
+"To verify that candidate mutations in regions with problematic alignment were
+not the outcome of misalignment, we realigned the 100 bases around the site
+using GATK HaplotypeCaller with the ‘--activeRegionIn’ option"
+
+so let's do that up
+
+```bash
+mkdir -p data/mutations/realignment
+ln -sv ~/apps/GenomeAnalysisTK-3.3/GenomeAnalysisTK.jar bin/GenomeAnalysisTK.jar
+
+time /usr/bin/java -jar ./bin/GenomeAnalysisTK.jar \
+    -T HaplotypeCaller \
+    -R data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+    -I data/alignments/bam/CC2937_0.bam \
+    -I data/alignments/bam/CC2937_5.bam \
+    -L chromosome_5 \
+    -ploidy 2 \
+    --activeRegionIn chromosome_5:377421-377521 \
+    --output_mode EMIT_ALL_SITES \
+    --heterozygosity 0.02 \
+    --indel_heterozygosity 0.002 \
+    -o data/mutations/realignment/test.vcf
+```
+
+## 27/4/2021
+
+looks like this made the variant 'disappear' altogether - and there's no variant at all
+that actually is different between the two parents in this region at all
+
+there isn't even a proximate indel that (in this case) explains what seemed to have 'created'
+the origin variants
+
+let's try automating this with a quick script - `realign_HC.py`
+
+test run:
+
+```
+# interval file
+CC2937 chromosome_5 377471
+```
+
+```bash
+time python analysis/filtering/realign_HC.py \
+--fname data/mutations/realignment/intervals.txt \
+--outdir data/mutations/realignment
+```
+
+looks good - will look in the surrounding 4 kb, with the surrounding 100 bp defined
+as the active region
+
+updating interval list:
+
+```
+CC2937 chromosome_5 377471
+CC2937 chromosome_9 2314036
+DL51 chromosome_11 2143294
+DL51 chromosome_11 2143301
+DL51 chromosome_11 2143306
+DL58 chromosome_2 4729387
+```
+
+with notes taken on the google sheets spreadsheet - long story short,
+only the last indel actually shows in the HC data, but it's a heterozygote call
+
+next up - need to download BAMs for review in real IGV for the iffy GQ10 muts
+that Rob has marked - also need to get them back on the server to run with this
+above script just to see if those indels explain anything
+
+in the file `data/mutations/mutations_GQ10_snps_reviewed.tsv`, all the 
+mutations where `pass == 2` need 
+
+1. to have local realignments like the ones above done
+2. to have bams downloaded for variant review
+
+for the latter case, would be good to create temp filtered bams for just the surrounding 2k
+each time for easy download and local review - might need another script for this
+
+also - need to create a 'master list' of mutations (probably in
+`data/filtered`) containing
+
+1. all the GQ30+ mutations
+2. all the GQ20 mutations that were manually passed
+3. all the GQ10 mutations that were manually passed
+
+and then need to google sheets `data/mutations/gq_tests/HC_pairs_20/mutations_HC_GQ20_indels.tsv`
+and then manually review + score the short indels using IGV
+
+and then need to finish reviewing the short indels in `mutations_HC_GQ20_indels.tsv` (in
+`data/mutations/gq_tests/HC_pairs_20` and also on google sheets) - it seems I started on
+this but didn't get especially far
 
 
 
