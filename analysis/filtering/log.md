@@ -1339,10 +1339,7 @@ that Rob has marked - also need to get them back on the server to run with this
 above script just to see if those indels explain anything
 
 in the file `data/mutations/mutations_GQ10_snps_reviewed.tsv`, all the 
-mutations where `pass == 2` need 
-
-1. to have local realignments like the ones above done
-2. to have bams downloaded for variant review
+mutations where `pass == 2` need to have bams downloaded for variant review
 
 for the latter case, would be good to create temp filtered bams for just the surrounding 2k
 each time for easy download and local review - might need another script for this
@@ -1360,6 +1357,57 @@ and then manually review + score the short indels using IGV
 and then need to finish reviewing the short indels in `mutations_HC_GQ20_indels.tsv` (in
 `data/mutations/gq_tests/HC_pairs_20` and also on google sheets) - it seems I started on
 this but didn't get especially far
+
+outstanding question - for the long stretches of mutations in DL40 and SL27, do we also
+exclude the ones that even HC called (which are much fewer?)
+
+still also need to regenerate the trimming stats and actually save the logs this time! 
+
+## 28/4/2021
+
+today:
+
+1. update 'master list' of mutations containing manually passed mutations
+2. create and download filtered bams from questionable GQ10 mutations for IGV review
+
+for point 2 - need to get ~4000 bp surrounding mutation of interest - probably
+overkill but it can't hurt
+
+```bash
+mkdir -p data/mutations/realignment/filtered_igv
+
+# can use samtools view like so:
+samtools view data/alignments/bam/bamfile.bam "chr:start-end" > out.sam
+```
+
+## 29/4/2021
+
+so I ended up losing most of yesterday to NSERC stuff... time to get back on this
+
+first, need to create a filtered version of the GQ10 spreadsheet with just
+the questionable mutations:
+
+```bash
+awk -F '\t' '(NR == 1) || ($11 == 2)' mutations_GQ10_snps_reviewed.tsv > GQ10_intervals.tsv
+```
+
+and then as per custom let's write a quick and dirty python script
+`export_IGV.py` to generate filtered bams based on this:
+
+```python
+time python analysis/filtering/export_IGV.py \
+--fname data/mutations/GQ10_intervals.tsv \
+--bam_dir data/alignments/bam \
+--region_size 4000 \
+--outdir data/mutations/realignment/filtered_igv
+```
+
+now to download these and have a look at them on IGV locally
+
+
+
+
+
 
 
 
