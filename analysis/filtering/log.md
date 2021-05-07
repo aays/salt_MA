@@ -1404,6 +1404,288 @@ time python analysis/filtering/export_IGV.py \
 
 now to download these and have a look at them on IGV locally
 
+## 1/5/2021
+
+today: in addition to continuing the IGV adventures, need to create 
+GQ10-30 spreadsheets for HC SNPs as well, and compare against the 'full' UG
+datasets - basically asking whether all UG mutations we've accepted are
+also in the HC dataset
+
+first - assembling a sheet of 'confirmed' SNPs mutations thus far:
+
+1. all the GQ30+ mutations (`data/mutations/gq_tests/pairs_30`)
+2. all the GQ20 mutations that were manually passed (`data/mutations/mutations_GQ20_snps_reviewed.tsv`)
+3. all the GQ10 mutations that were manually passed (`data/mutations/mutations_GQ10_snps_reviewed.tsv`)
+
+the third set here is still being manually filtered and will need to be updated, 
+I can do a HC check here
+
+```R
+library(dplyr)
+library(readr)
+library(purrr)
+library(stringr)
+library(fs)
+
+gq30_fnames <- dir_ls('data/mutations/gq_tests/pairs_30')
+d_30 <- map_dfr(gq30_fnames, read_delim, delim = '\t', col_types = cols())
+d_20 <- read_delim('data/mutations/mutations_GQ20_snps_reviewed.tsv') %>%
+    filter(pass == 1) %>%
+    select(fname, chrom, pos, ref, alt, gt_bases, gt_quals, gt_depths)
+all_muts <- bind_rows(d_30, d_20) %>%
+    arrange(fname, chrom, pos)
+write_tsv(all_muts, 'data/mutations/all_mutations.tsv')
+
+# is every one of these muts in the HC data as well?
+
+d_hc <- read_tsv('data/mutations/gq_tests/HC_pairs_20/mutations_HC_GQ20_snps.tsv', col_types = cols()) %>%
+    mutate(fname = ifelse(
+        str_detect(fname, 'DL4[0-9]_4[0-9]'), paste0(fname, '_samples'), fname)) %>%
+    select(-GQ1, -GQ2)
+
+```
+
+might need to port these files offline for a closer analysis in RStudio
+    
+
+## 2/5/2021
+
+wait - I never removed indels from the `pairs_30` dataset...
+
+```bash
+cd data/mutations/gq_tests/pairs_30
+head -n 1 $(ls -tr | head -n 1) > mutations_GQ30.tsv
+for fname in *txt; do 
+    tail -n +2 ${fname} >> mutations_GQ30.tsv;
+done
+```
+
+SNPs only:
+
+```bash
+import csv
+from tqdm import tqdm
+fname = 'mutations_GQ30.tsv'
+outname = 'mutations_GQ30_snps.tsv'
+with open(fname, 'r', newline='') as f_in:
+    reader = csv.DictReader(f_in, delimiter='\t')
+    fieldnames = reader.fieldnames
+    fieldnames.extend(['GQ1', 'GQ2'])
+    with open(outname, 'w', newline='') as f_out:
+        writer = csv.DictWriter(f_out, fieldnames=fieldnames, delimiter='\t')
+        writer.writeheader()
+        for record in tqdm(reader):
+            alt = eval(record['alt'])
+            max_alt_length = max([len(s) for s in alt])
+            if max_alt_length == 1 and len(record['ref']) == 1:
+                line_out = record
+                line_out['GQ1'], line_out['GQ2'] = eval(record['gt_quals'])
+                writer.writerow(line_out)
+```
+
+regenerating the all mutations file:
+
+```R
+library(dplyr)
+library(readr)
+library(purrr)
+library(stringr)
+library(fs)
+
+d_30 <- read_tsv('data/mutations/gq_tests/pairs_30/mutations_GQ30_snps.tsv', col_types = cols())
+d_20 <- read_tsv('data/mutations/mutations_GQ20_snps_reviewed.tsv') %>%
+    filter(pass == 1) %>%
+    select(fname, chrom, pos, ref, alt, gt_bases, gt_quals, gt_depths)
+all_muts <- bind_rows(d_30, d_20) %>%
+    arrange(fname, chrom, pos)
+write_tsv(all_muts, 'data/mutations/all_mutations.tsv')
+```
+
+wait - I've confused myself - the GQ20 sheet contains >GQ30 mutations as well - so the real
+all mutations file would just be the passed ones in that file
+
+just checked in R as well and the only ones in the 30 file not in the 20 are the ones where
+pass != 1
+
+```R
+library(dplyr)
+library(readr)
+library(purrr)
+library(stringr)
+library(fs)
+
+# coulda done this in awk lol
+d_20 <- read_tsv('data/mutations/mutations_GQ20_snps_reviewed.tsv') %>%
+    filter(pass == 1) %>%
+    select(fname, chrom, pos, ref, alt, gt_bases, gt_quals, gt_depths, GQ1, GQ2)
+write_tsv(d_20, 'data/mutations/all_mutations.tsv')
+```
+
+## 5/5/2021
+
+today - making sense of the original 'mutation describer' and
+recreating its functionality
+
+the original mutation table format can be seen in `annotations/mut_list` (in the
+main folder) and the mutation describer py2.7 script is at
+`annotations/scripts/JL_mut_describer.py`
+
+going to go through this script and 'pseudocode out' what it does:
+
+```python
+# args
+annotation_table_file
+reference_fasta
+population_vcf_file # should find example of which VCFs were used and their samples
+num_mutated # this is never referenced in the script again
+mut_file # ostensibly the tsvs in mut_list
+vcf_file # check how this differs from population_vcf_file - latter used for pi calc
+
+# constants
+num_unmutated = 1 # why assign this? 
+mut_sample_count = collections.defaultdict(int) # dict that defaults to int key
+h = 0 # used to ensure header prints only once apparently
+ref_dict = SeqIO.to_dict(SeqIO.parse(reference_fasta, 'fasta'))
+
+# main loop
+for line in open(mut_file):
+    sp = line.split('\t')
+    chrom = sp[0]
+    pos = int(sp[1])
+    mut = mutation.mutation(chrom, pos) # USES ROB'S CUSTOM MUTATION CLASS
+    # will need to get mut class working with py3.6 even though it was written in 2.7...
+
+    # populating mut object attributes, apparently - 
+    mut.ref = sp[2]
+    mut.alt = sp[3]
+    mut.qual = float(sp[4])
+    mut.MQ = float(sp[5]) # mapping quality
+    mut.call_method = sp[8] # idgi - this is just 'QUAL' in the entire file I think?
+
+    # more complex (?) mut object attributes
+    samples = mut.samples(vcf_file) # why get samples via mut class instead of pyvcf instance?
+    mutation_event = mut.mutation(vcf_file, mut_quality=mut_quality) # exposes VCF info to mut class?
+    mut_type = mut.mutation_type(vcf_file) # for 'ref>alt' style formatting I believe
+    sample = mut.mutant_sample(vcf_file, mut_quality) # no idea what this does - seems very roundabout
+
+    # calculations and filtering
+    purity = mut.purity(vcf_file) # apparently this variable is never used
+    if len(mut.purity(vcf_file)) > 0: # why not use purity variable??
+        min_purity = min(mut.purity(vcf_file))
+    else:
+        min_purity = 'n/a'
+
+    # variant stats by way of mut object
+    het_count = mut.het_count(vcf_file)
+    number_mutants = mut.number_mutants(vcf_file)
+    number_genotypes = mut.number_genotypes(vcf_file)
+    GTs, ADs = mut.GTs(vcf_file), mut.ADs(vcf_file) 
+    DPs, GQs = mut.DPs(vcf_file), mut.GQs(vcf_file)
+
+    # more 'genomic' stats
+    gc20 = mut.gc_content(ref_dict, 10) # this should be using sample consensus sequence - I hope
+    gc2000 = mut.gc_content(ref_dict, 1000)
+    pi1000 = mut.pi(population_vcf_file, 500, ref_dict) # so this is what pop vcf file is for
+    annotation_pos = mut.annotation_position(annotation_table_file)
+    if annotation_pos.CDS == '1' and mut_type == 'SNP':
+        mut.nonsyn_syn = mut.nonsynonymous(annotation_table_file, vcf_file)
+        nonsyn_syn = mut.nonsynonymous(annotation_table_file, vcf_file) # same thing but as a local?
+    else:
+        mut.nonsyn_syn = ('n/a', 'n/a', 'n/a')
+        nonsyn_syn = ('n/a', 'n/a', 'n/a') # again w the confusing local assignment
+    nonsense = mut.nonsense(vcf_file, annotation_table_file)
+
+    # prepping outfile
+    annotation_header = '\t'.join([]) # has all the ant column names
+    header = '\t'.join([
+        'chromosome', 'position', 'ref', 'alt', 'qual', 'MQ',
+        'mutation', 'type', 'mutant_sample', 'call_method', 
+        'HQ_calls', 'min_purity', 'het_count', 'number_mutants',
+        'number_genotypes', 'gc20', 'gc2000', 'pi1000',
+        annotation_header, # ?!?!?!
+        'Nonsyn_V_Syn', 'anc_codon', 'mut_codon', 'nonsense',
+        "\t".join([str(j)+"_GT" for j in samples]), \
+        "\t".join([str(j)+"_AD" for j in samples]), \
+        "\t".join([str(j)+"_DP" for j in samples]), \
+        "\t".join([str(j)+"_GQ" for j in samples])
+    ])
+
+    if h == 0: # ah so this is so that the header only prints the first time
+        print(header)
+        h += 1
+
+    sys.stdout.write('\t'.join([
+        mut.chromosome, mut.position, mut.ref, mut.alt, mut.qual,
+        mut.MQ, '>'.join(mutation_event), # ah - so this is a C>T type deal
+        mut_type, sample, mut.call_method, num_HQ_calls, # HQ calls was never defined...
+        min_purity, het_count, number_mutants, number_genotypes,
+        gc20, gc2000, pi1000, 
+        annotation_position.output_line(), # corresponding to the header above - feels like overkill
+        '\t'.join([str(x) for x in nonsyn_syn]),
+        nonsense,
+        '\t'.join([str(x) for x in GTs]),
+        '\t'.join([str(x) for x in ADs]),
+        '\t'.join([str(x) for x in DPs]),
+        '\t'.join([str(x) for x in GQs])]) + '\n')
+
+```
+
+this is (mostly) well and good, but before I can proceed with this, need to get
+the mutation and the annotation table scripts working with py3.6
+
+`mutation.py` and `annotation_table.py` are both in `/reseach/repos/annotation` -
+off the bat - looks like this needs to be converted to py3.6 altogether - breaks pretty quick! 
+
+going to make a copy (NOT symlink) of both `mutation.py` and `annotation_table.py` in 
+`.conda/env/work/lib/python3.6/site-packages/`
+ 
+looking like `annotation_table.py` functions as is - figures since it's a fairly
+lightweight parser that lets `pysam.Tabixfile` do most of the work 
+
+update: `mutation.py` _should_ be py3 compatible now - in addition to the usual `print`/`exec`
+statement fare, had to remove the `string` imports (those methods are now part of 
+string methods in py3) and import `ness_vcf` and `annotation_table` at the top level
+since the scripts just live 'as is' in `site-packages` (hooray conda!...)
+
+also needed to convert all tabs to spaces - thank goodness for `:retab` in vim
+
+(I may be a little inebriated... I hope this works tomorrow all the same)
+
+tomorrow - need to get started on a new version of mut describer! and consolidate
+the SNM (incl. GQ10 manually reviewed mutations) and indels from HC calls
+
+other things - checking on HC in the morning (see alignment log) and also
+getting those trimming stats 
+
+## 6/5/2021
+
+today - getting the GQ10 muts and indels on the server, and then getting started
+on a new mut describer script
+
+in the indel file, I've marked cases of alignment issues leading to the appearance
+of multiple indels as '4', and all other passed indels are '1'
+
+joining muts and making indels file:
+
+```R
+library(tidyverse)
+
+d_all <- read_tsv('all_mutations.tsv')
+filtered <- read_tsv('mutations_GQ10_snps_reviewed.tsv') %>%
+    filter(pass == 1) %>%
+    select(fname, chrom, pos, ref, alt, gt_bases, gt_quals, gt_depths, GQ1, GQ2)
+
+combined <- bind_rows(d_all, filtered)
+
+# overwrite earlier all_muts file - equivalent to appending really
+write_tsv(combined, path = 'all_mutations.tsv')
+
+indels_all <- read_tsv('mutations_HC_GQ20_indels.tsv') %>%
+    filter(pass == 1 | pass == 4) %>%
+    select(fname, chrom, pos, ref, alt, gt_bases, gt_depths, GQ1, GQ2) # apparently I forgot the gt_quals column
+write_tsv(indels_all, path = 'all_indels.tsv')
+```
+        
 
 
 
