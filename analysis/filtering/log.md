@@ -1685,14 +1685,193 @@ indels_all <- read_tsv('mutations_HC_GQ20_indels.tsv') %>%
     select(fname, chrom, pos, ref, alt, gt_bases, gt_depths, GQ1, GQ2) # apparently I forgot the gt_quals column
 write_tsv(indels_all, path = 'all_indels.tsv')
 ```
-        
+
+now for mut describer - before I actually write this script, let's just try
+to read in a single mutation and access various `mutation.mutation` attributes to
+see if anything breaks 
+
+```python
+import annotation_table
+import ness_vcf
+import mutation
+import vcf
+from tqdm import tqdm
+
+with open('all_mutations.tsv', 'r') as f:
+    for line in f:
+        if line.startswith('fname'):
+            continue
+        x = line.rstrip().split('\t')
+        break
+
+# ['CC1373_samples', 'chromosome_5', '1737824', 'G', "['T']", "['T/T', 'G/G']", '[30.0, 63.0]', '[11, 21]', '30', '63']
+
+sample = x[0]
+chrom = x[1]
+pos = int(x[2])
+
+mut = mutation.mutation(chrom, pos)
+
+# apparently the mut object is empty - need to populate attributes
+# will have to write code that accounts for len(ALT) == 2
+# also need to eval (ugh) the alt column to use it
+```
+
+## 8/5/2021
+
+time to write this script - calling it `mut_describer.py`
+
+notes while I make this -
+
+- need to add MQ and QUAL to the `all_mutations` and `all_indels` file just
+for completeness
+- need to test behaviour when len(ALT) is 2 - it seems that `mutation.mutation`
+is getting the directionality wrong - (if ref is G and samples are A and C, it claims it's a `C>A` mut)
+    - in this case, we probably need to look at the ancestors, right...
+    - might be a separate analysis involving going through the combined files to infer what
+    the ancestral state was - I should count how many times this happen to see whether this is
+    feasible to do manually or whether I need to automate it
+
+## 9/5/2021
+
+let's check how often we get more than one alt allele:
+
+```python
+>>> with open('all_mutations.tsv', 'r') as f:
+...     counter = 0
+...     dbl = 0
+...     for line in tqdm(f):
+...         if line.startswith('fname'):
+...             continue
+...         sp = line.split('\t')
+...         alt = eval(sp[4])
+...         if len(alt) > 1:
+...             dbl += 1
+...         counter += 1
+>>> print(dbl, counter)
+1 208
+```
+
+just the one! looks like this is a much more common occurrence for indels though:
 
 
+```python
+>>> with open('all_indels.tsv', 'r') as f:
+...     counter = 0
+...     dbl = 0
+...     for line in tqdm(f):
+...         if line.startswith('fname'):
+...             continue
+...         sp = line.split('\t')
+...         alt = eval(sp[4])
+...         if len(alt) > 1:
+...             dbl += 1
+...         counter += 1
+219it [00:00, 54649.72it/s]
+>>> print(dbl, counter)
+23 218
+```
 
+so for now I'm going to write mut describer without accounting for this much -
+will deal with these manually I suppose
 
+remaining to do before mut describer is ready:
 
+1. add annotation table headers and fields
+2. add MQ and QUAL fields to `all_mutations.tsv` and `all_indels.tsv` since these
+need to be in the final file
+3. what do I use for `population_vcf_file`? what was used previously? 
 
+code for task 2 above:
 
+```python
+import csv
+from copy import deepcopy
+from cyvcf2 import VCF
+from tqdm import tqdm
+
+with open('data/mutations/all_mutations.tsv', 'r') as f_in:
+    reader = csv.DictReader(f_in, delimiter='\t')
+    fieldnames = reader.fieldnames
+    fieldnames.extend(['MQ', 'QUAL'])
+    with open('data/mutations/all_muts_corrected.tsv', 'w') as f_out:
+        writer = csv.DictWriter(f_out, fieldnames=fieldnames, delimiter='\t')
+        writer.writeheader()
+        for mut_dict in tqdm(reader):
+            out = deepcopy(mut_dict)
+            v = VCF(f"data/alignments/genotyping/UG/pairs/{out['fname']}.vcf.gz")
+            chrom, pos = out['chrom'], out['pos']
+            record = [r for r in v(f"{chrom}:{pos}-{pos}")][0]
+            out['MQ'] = record.INFO.get('MQ')
+            out['QUAL'] = record.QUAL
+            writer.writerow(out)
+```
+
+reran for indels as well, just switching filenames and switching VCF folder to HC
+
+task 1 also done, so tomorrow, need to figure out pop vcf file and then it's off
+to the races!
+
+other remaining task 'mutation-side' would be to manually check ancestral alleles for
+the 'double alt' muts - I expect a lot of the indels in this category to not have
+any though...
+
+## 10/5/2021
+
+update: won't be using pi1000 values for this anyways, so making that argument optional
+
+here goes! 
+
+```bash
+mkdir -p data/mutations/mut_tables/
+mv -v data/mutations/all* data/mutations/mut_tables/
+
+time python analysis/filtering/mut_describer.py \
+--fname data/mutations/mut_tables/all_muts_corrected.tsv \
+--vcf_path data/alignments/genotyping/UG/pairs/ \
+--ant_file data/references/annotation_table.txt.gz \
+--ref_fasta data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+--outname muts_test.tsv
+```
+
+needed to fix a bug in `mutation.py` (`maketrans` is now a str method)
+
+```python
+# old
+def reverse_complement(sequence):
+    return str(sequence)[::-1].translate(maketrans('ACGTNRYKMWS?X.-BDHV', 'TGCANYRMKWS?X.-VHDB'))
+
+# new
+def reverse_complement(sequence):
+    t = sequence.maketrans('ACGTNRYKMWS?X.-BDHV', 'TGCANYRMKWS?X.-VHDB')
+    return str(sequence)[::-1].translate(t)
+```
+
+regenerating the annotation table tbi cause the warning about it being older
+is driving me nuts (they're 'equally old', both set to the date server maintenance
+reset their timestamps)
+
+also had to modify `mutation` to lower quality to 10
+
+script is working, but need to use combined VCFs to get correct mutation 'direction'
+
+```bash
+time python analysis/filtering/mut_describer.py \
+--fname data/mutations/mut_tables/all_muts_corrected.tsv \
+--vcf_path data/alignments/genotyping/UG/combined/ \
+--ant_file data/references/annotation_table.txt.gz \
+--ref_fasta data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+--outname muts_test_combined.tsv
+```
+
+also had to change the default `num_mutated` to 5 (though I need to go back
+and look manually at the 'ancestral reappearing mutations' later) as well
+as adding a check to see whether the GQ field exists since a lot of the GT/AD/etc
+listcomps were breaking without that check (and the prior VCFs don't have GQ on 
+invariant sites) 
+
+next up - need to do a CombineVariants run on the `DL41_46` and vice versa samples
+before running mut describer on those (since I currently don't have those combined VCFs)
 
 
 
