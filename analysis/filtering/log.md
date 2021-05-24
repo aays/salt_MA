@@ -1873,6 +1873,299 @@ invariant sites)
 next up - need to do a CombineVariants run on the `DL41_46` and vice versa samples
 before running mut describer on those (since I currently don't have those combined VCFs)
 
+## 16/5/2021
+
+finally done CombineVariants - getting this show on the road: 
+
+```bash
+time python analysis/filtering/mut_describer.py \
+--fname data/mutations/mut_tables/all_muts_corrected.tsv \
+--vcf_path data/alignments/genotying/UG/combined \
+--ref_fasta data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+--ant_file data/references/annotation_table.txt.gz \
+--outname muts_test_combined.tsv
+```
+
+finally worked - had to bump up `num_mutated` in the `mutation` class to 10 to get
+this to work
+
+remaining things to deal with - 
+
+1. that one record with multiple ALT alleles - needs to be manually examined
+2. all records where `num_mutated` is more than 1 - need to see whether these
+   cases are inherited muts or recurrent (?) muts! 
+
+also - the output file has " at the start and end of the annotation table columns, in a strange
+attempt to work around the `'` in the `feature_names` column
+
+update - R is not reading these headers correctly! I think we need to unpack the annotation
+table columns... fixed this with a quick loop in `describe_mut`
+
+next up - manually examining that record with multiple ALT alleles - 
+CC1952, `chromosome_7:3938585`
+
+looks like a `C>A` mutation! `G>C` in 1952, and `C>A` in the 0 sample in the salt MA lines
+
+how many mutations had `num_mutated` > 1?
+
+```python
+import vcf
+import mutation
+import csv
+
+with open('data/mutations/mut_tables/all_muts_corrected.tsv', 'r') as f:
+    reader = csv.DictReader(f, delimiter='\t')
+    lines = [r for r in reader]
+
+counter = 0
+vcf_dir = 'data/alignments/genotyping/UG/combined/'
+
+for mut in lines:
+    x = mutation.mutation(mut['chrom'], int(mut['pos']))
+    vcf_name = vcf_dir + mut['fname'].replace('samples', '') + 'combined.vcf.gz'
+    gts = x.hq_GTs(vcf_name)
+    if min(gts.count(gt) for gt in gts) > 1 or len(list(set(gts))) > 2:
+        counter += 1
+# 44
+# which 44 though -
+
+multi = []
+for mut in lines:
+    x = mutation.mutation(mut['chrom'], int(mut['pos']))
+    vcf_name = vcf_dir + mut['fname'].replace('samples', '') + 'combined.vcf.gz'
+    gts = x.hq_GTs(vcf_name)
+    if min(gts.count(gt) for gt in gts) > 1 or len(list(set(gts))) > 2:
+        multi.append(vcf_name, x])
+
+def describe(vcf_path, mut):
+    print(vcf_path, mut.chromosome, mut.position)
+    vcf_rec = mut.vcf_record(vcf_path)
+    print(vcf_rec.REF, vcf_rec.ALT)
+    return [[s['GT'], s['GQ'], s.sample] for s in vcf_rec.samples]
+
+# writing to an outfile
+with open('data/mutations/mut_tables/multi_muts.tsv', 'w', newline='') as f:
+    fieldnames = [
+    'fname', 'chrom', 'pos', 'ref', 'alt']
+    vcf_rec = multi[0][1].vcf_record(multi[0][0])
+    samples = [s.sample for s in vcf_rec.samples][:-2]
+    samples.extend(['fname_0', 'fname_5'])
+    cols = [(f'{s}_GT', f'{s}_GQ') for s in samples]
+    fieldnames.extend([colname for pair in cols for colname in pair])
+    writer = csv.DictWriter(f, delimiter='\t', fieldnames=fieldnames)
+    writer.writeheader()
+
+    for vcf_path, mut in multi:
+        vcf_rec = mut.vcf_record(vcf_path)
+        d = {}
+        d['fname'] = vcf_path.replace('data/alignments/genotyping/UG/combined/', '').replace('.vcf.gz', '')
+        d['chrom'] = mut.chromosome
+        d['pos'] = mut.position
+        d['ref'] = vcf_rec.REF
+        d['alt'] = vcf_rec.ALT
+        for sample in vcf_rec.samples:
+            if sample.sample.endswith('_0'):
+                d['fname_0_GT'] = sample['GT']
+                d['fname_0_GQ'] = sample['GQ']
+            elif sample.sample.endswith('_5'):
+                d['fname_5_GT'] = sample['GT']
+                d['fname_5_GQ'] = sample['GQ']
+            else:
+                d[sample.sample + '_GT'] = sample['GT']
+                d[sample.sample + '_GQ'] = sample['GQ']
+        writer.writerow(d)
+```
+
+that worked first try? wild
+
+going to download these and make notes in a spreadsheet
+
+remaining tasks -
+
+1. check mut describer calls and see if they correlate with the manual checks in the spreadsheet
+2. check intersection between HC and UG calls again and get extra HC muts in there
+3. run mut describer on indels
+4. similar 'multi' analysis on indels
+
+also, smaller task - find previous mut describer outputs as well, for remaking plots etc
+
+## 20/5/2021
+
+so apparently there are a few mutations (eg `chromosome_15:411424`, seen in DL55) that are actually
+called by mut describer in an ancestral sample (CC124 in this case) - how do we want to handle these?
+
+this and the few 'recurrent' mutations that I've found in the spreadsheet I made probably need
+to be discussed with Rob - but for now I should get mut describer going on the indels and make a
+similar spreadsheet
+
+will also need to check tomorrow how well the 'clear cut' calls in the spreadsheet match up with
+what mut describer decided itself
+
+```bash
+time python analysis/filtering/mut_describer.py \
+--fname data/mutations/mut_tables/all_indels_corrected.tsv \
+--vcf_path data/alignments/genotying/HC/combined \
+--ref_fasta data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+--ant_file data/references/annotation_table.txt.gz \
+--outname indels_test_combined.tsv
+```
+
+shoot - also need to create the `DL41_46` type files with CombineVariants for HC
+
+## 21/5/2021
+
+all done and now functioning as intended - now for the multi muts check:
+
+```bash
+import vcf
+import mutation
+import csv
+
+with open('data/mutations/mut_tables/all_indels_corrected.tsv', 'r') as f:
+    reader = csv.DictReader(f, delimiter='\t')
+    lines = [r for r in reader]
+
+counter = 0
+vcf_dir = 'data/alignments/genotyping/UG/combined/'
+
+for mut in lines:
+    x = mutation.mutation(mut['chrom'], int(mut['pos']))
+    vcf_name = vcf_dir + mut['fname'].replace('samples', '') + 'combined.vcf.gz'
+    if '_4' in vcf_name:
+        vcf_name = vcf_name.replace('combined.vcf.gz', '_combined.vcf.gz')
+    gts = x.hq_GTs(vcf_name)
+    if min(gts.count(gt) for gt in gts) > 1 or len(list(set(gts))) > 2:
+        counter += 1
+# 105! of 218... oh boy
+
+multi = []
+for mut in lines:
+    x = mutation.mutation(mut['chrom'], int(mut['pos']))
+    vcf_name = vcf_dir + mut['fname'].replace('samples', '') + 'combined.vcf.gz'
+    if '_4' in vcf_name:
+        vcf_name = vcf_name.replace('combined.vcf.gz', '_combined.vcf.gz')
+    gts = x.hq_GTs(vcf_name)
+    if min(gts.count(gt) for gt in gts) > 1 or len(list(set(gts))) > 2:
+        multi.append(vcf_name, x])
+
+# writing to an outfile
+with open('data/mutations/mut_tables/multi_indels.tsv', 'w', newline='') as f:
+    fieldnames = [
+    'fname', 'chrom', 'pos', 'ref', 'alt']
+    vcf_rec = multi[20][1].vcf_record(multi[0][0]) # first record was weird
+    samples = [s.sample for s in vcf_rec.samples][:-2]
+    samples.extend(['fname_0', 'fname_5'])
+    cols = [(f'{s}_GT', f'{s}_GQ') for s in samples]
+    fieldnames.extend([colname for pair in cols for colname in pair])
+    writer = csv.DictWriter(f, delimiter='\t', fieldnames=fieldnames)
+    writer.writeheader()
+
+    for vcf_path, mut in multi:
+        vcf_rec = mut.vcf_record(vcf_path)
+        d = {}
+        d['fname'] = vcf_path.replace('data/alignments/genotyping/UG/combined/', '').replace('.vcf.gz', '')
+        d['chrom'] = mut.chromosome
+        d['pos'] = mut.position
+        d['ref'] = vcf_rec.REF
+        d['alt'] = vcf_rec.ALT
+        for sample in vcf_rec.samples:
+            if sample.sample.endswith('_0'):
+                d['fname_0_GT'] = sample['GT']
+                d['fname_0_GQ'] = sample['GQ']
+            elif sample.sample.endswith('_5'):
+                d['fname_5_GT'] = sample['GT']
+                d['fname_5_GQ'] = sample['GQ']
+            else:
+                d[sample.sample + '_GT'] = sample['GT']
+                d[sample.sample + '_GQ'] = sample['GQ']
+        writer.writerow(d)
+```
+
+reviewing to-do list:
+
+1. check mut describer calls and see if they correlate with the manual checks in the spreadsheet - SORTA DONE
+2. check intersection between HC and UG calls again and get extra HC muts in there
+3. run mut describer on indels - DONE
+4. similar 'multi' analysis on indels
+
+eyeballing item 1 above, and a few things to note -
+
+- the manual checks don't correlate a lot of the time - mut describer tends to pick the wt/D/S lines
+when it comes to muts that appear to be 'recurrent'
+- mut describer currently ignores anything with multiple alts, so we're still missing those
+    - ^ this also means a lot of the indels are missing in the mut describer output!  
+
+## 22/5/2021
+
+it occurs to me that `mutation.py` can handle multiple alts just fine - I should
+update `mut_describer` to account for this and rerun the muts at minimum to see those calls
+
+```bash
+time python analysis/filtering/mut_describer.py \
+--fname data/mutations/mut_tables/all_muts_corrected.tsv \
+--vcf_path data/alignments/genotying/UG/combined \
+--ref_fasta data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+--ant_file data/references/annotation_table.txt.gz \
+--outname muts_test_combined_new.tsv
+```
+
+## 24/5/2021
+
+calls for multi-alt samples still defaulting to wt/D/S strains in some cases - need to
+get the 'pedigree' for these lines figured out with Rob asap before redoing this for indels
+
+in the meantime, checked point 2 from the to-do list above and I had it the wrong way around -
+a few (9) muts are present in UG but missing in HC - but looking at IGV for each of these,
+they look like legitimate calls, so keeping them in there
+
+so that leaves the 'multi muts/indels' analysis (muts mostly checked, save for a few 
+particularly confusing ones) and calculating the fraction of callable sites before
+getting started with the remaining questions/analyses:
+
+- does salt stress affect de novo mutation?
+    - overall mut rate (SNM rate, indel rate) - can get this sooner (e.g. before 'multi' analysis)
+        - need to do this for salt MA, MA, salt adaptation, and report
+        - indel:SNM ratio
+    - mut context
+    - base spectrum
+        - 6 mutation rates for MA, saltMA, adaptation
+        - 32 triplet rates for MA, saltMA, adaptation 
+            - could I start this for the previous files? is in the ms already?
+- effect of strain on salt MA
+    - compare de novo mut rate between salt and non-salt conditions
+
+
+looking through the ms, currently we have -
+
+- context for SNMs + indels in MA and adaptation lines
+- distribution for SNMs + indels in MA and adaptation lines
+    - incl. inter-mutation distance
+- base spectrum for MA and adaptation
+- eq. GC for MA and adaptation
+
+so for now I can do -
+
+- 32 triplet rates for MA and adaptation lines
+
+first - let's find the files with the original mut describer output to
+calculate this from, as well as the relevant VCFs - ideally we want to grab the
+surrounding bases from the same line instead of from the reference in case they
+differ from the ref strain
+
+```
+# annotations/output
+SL1_haplotype_shared_salt_muts.annotated.txt 
+SL1_haplotype_shared_salt_indels.annotated.txt 
+SL2_haplotype_shared_salt_muts.annotated.txt 
+SL2_haplotype_shared_salt_indels.annotated.txt 
+unique_salt_muts.annotated.txt
+unique_salt_indels.annotated.txt
+
+# /research/projects/chlamydomonas/bgi_full_MA/mutation_calls
+final.curated_muts.coord_sorted.txt.gz
+```
+
+starting a new analysis folder for this! `analysis/spectrum_context`
 
 
 

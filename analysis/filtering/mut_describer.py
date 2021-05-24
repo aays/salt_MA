@@ -36,7 +36,7 @@ def args():
     return args.fname, args.vcf_path, args.ref_fasta, args.ant_file, \
         args.pop_vcf_file, args.outname
 
-def describe_mut(d_in, vcf_path, ref_fasta, ant_file, pop_vcf_file) -> str:
+def describe_mut(d_in, vcf_path, ref_fasta, ant_file, pop_vcf_file) -> dict:
     """
     convert single mutation line (as list) to 'mut describer format'
 
@@ -68,8 +68,8 @@ def describe_mut(d_in, vcf_path, ref_fasta, ant_file, pop_vcf_file) -> str:
 
     # create mutation.mutation object
     fname = d_in['fname']
-    vcf_file = glob(vcf_path + fname.split('_')[0] + '*.vcf.gz')[0] # ugh
-    print(vcf_file)
+    vcf_file = glob(vcf_path + fname.replace('samples', '') + '*.vcf.gz')[0] # ugh
+    tqdm.write(vcf_file)
     chrom = d_in['chrom']
     pos = int(d_in['pos'])
     mut = mutation.mutation(chrom, pos)
@@ -77,8 +77,6 @@ def describe_mut(d_in, vcf_path, ref_fasta, ant_file, pop_vcf_file) -> str:
     # populate dict
     mut.ref = d_in['ref']
     mut.alt = eval(d_in['alt'])
-    if len(mut.alt) > 1:
-        return None
     
     d['chromosome'] = chrom
     d['position'] = pos
@@ -132,7 +130,9 @@ def describe_mut(d_in, vcf_path, ref_fasta, ant_file, pop_vcf_file) -> str:
     'feature_types', 'feature_ID', 'cds_position', 'strand', 'frame',
     'codon', 'aa', 'degen', 'FPKM', 'rho', 'FAIRE', 'recombination',
     'mutability', 'all_quebec_alleles']
-    d['\t'.join(ant_cols)] = ant_pos.output_line() # blech
+    ant_vals = ant_pos.output_line().split('\t')
+    for i, _ in enumerate(ant_cols):
+        d[ant_cols[i]] = ant_vals[i]
 
     return d
 
@@ -178,13 +178,13 @@ def parse_muts(fname, vcf_path, ref_fasta, ant_file, pop_vcf_file, outname) -> N
 
     # may become optional, so keeping separate
     ant_cols = [
-    'chromosome', 'position', 'reference_base', 'genic', 'exonic',
+    'reference_base', 'genic', 'exonic',
     'intronic', 'intergenic', 'utr5', 'utr3', 'fold0', 'fold4',
     'fold2', 'fold3', 'CDS', 'mRNA', 'rRNA', 'tRNA', 'feature_names',
     'feature_types', 'feature_ID', 'cds_position', 'strand', 'frame',
     'codon', 'aa', 'degen', 'FPKM', 'rho', 'FAIRE', 'recombination',
     'mutability', 'all_quebec_alleles']
-    fieldnames.append('\t'.join(ant_cols)) # blech
+    fieldnames.extend(ant_cols)
 
     total_lines = 0
     with open(fname, 'r') as f:
