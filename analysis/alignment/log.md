@@ -2116,6 +2116,11 @@ time bash gvcf_temp.sh SL27 0
 time bash gvcf_temp.sh SL27 5
 ```
 
+seems the SL lines took longer, interestingly enough (10 hrs for 26,
+4.5 hrs for SL27 0)
+
+
+
 
 
 

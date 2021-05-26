@@ -2167,5 +2167,17 @@ final.curated_muts.coord_sorted.txt.gz
 
 starting a new analysis folder for this! `analysis/spectrum_context`
 
+## 26/5/2021
+
+some file cleanup:
+
+```bash
+# in data/mutations/mut_tables
+rm all_mutations.tsv # same as 'corrected' files but w/o MQ and QUAL
+
+rm all_indels.tsv
+mv -v all_indels_corrected.tsv all_indels.tsv
+mv -v all_muts_corrected.tsv all_muts.tsv
+```
 
 
