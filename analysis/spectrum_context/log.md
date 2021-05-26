@@ -62,3 +62,18 @@ mkdir -p data/spectrum_context/triplets/
 ```
 
 getting started on a script called `get_triplets.py`
+
+## 26/5/2021
+
+first pass finally done - let's give it a whirl on the MA files:
+
+```bash
+mkdir -p data/spectrum_context/triplets/
+
+time python analysis/spectrum_context/get_triplets.py \
+--fname data/spectrum_context/MA/final.curated_muts.coord_sorted.txt \
+--vcf data/spectrum_context/MA/CC1373.vcf.gz \
+--most_recent --out data/spectrum_context/triplets/CC1373_MA.tsv
+```
+
+
