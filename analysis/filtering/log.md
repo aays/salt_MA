@@ -2180,4 +2180,121 @@ mv -v all_indels_corrected.tsv all_indels.tsv
 mv -v all_muts_corrected.tsv all_muts.tsv
 ```
 
+## 4/6/2021
+
+to do -
+- create `filtered_mut_tables` folder with manually removed calls based on multi analysis
+- start SL26 specific analysis
+    - will need to modify filtering script to handle 'combined' files differently
+    - script currently requires a 0 and 5 sample in every VCF no matter what 
+
+made a file in `mut_tables` called `filtered_muts.tsv` instead with flagged
+mutations removed
+
+now to do the SL26 analysis - need to update `filter_candidate_muts.py` to
+be able to handle 'single sample' combined VCFs, since it currently expects
+a 0 and 5 sample for each
+
+once this is done, I have to add the SL26 muts to `filtered_muts.tsv` and
+run `mut_describer` a final time
+
+giving this a go:
+
+```bash
+time python analysis/filtering/filter_candidate_muts.py \
+--vcf data/alignments/genotyping/UG/combined/SL26_combined.vcf.gz \
+--gq 10 --out_format table --vcf_type combined \
+--verbose_level 1 --single_sample \
+--out SL26_test.tsv
+```
+
+no mutations found - but before I get to trying to figure out why,
+perhaps it makes most sense to just compare the SL26 5 sample with earlier
+SL26 calls? 
+
+trying this again after changing `--single_sample` from a bool arg
+to one that takes in a 'sample to compare' as input
+
+the sample in this case is 'S26' - not SL
+
+```bash
+time python analysis/filtering/filter_candidate_muts.py \
+--vcf data/alignments/genotyping/UG/combined/SL26_combined.vcf.gz \
+--gq 10 --out_format table --vcf_type combined \
+--verbose_level 1 --single_sample S26 \
+--out SL26_test.tsv
+```
+
+scratch that - the outputs look terrible, since they're including
+all samples - I'm just going to create a 'pairs' file with bcftools for this
+
+```bash
+cd data/alignment/genotyping/UG/combined
+touch samples.txt # contains ./S26/ and SL26_5 on separate lines
+bcftools view -S samples.txt SL26_combined.vcf.gz > SL26_filt.vcf
+# took just under 11 minutes
+
+bgzip SL26_filt.vcf
+tabix -p vcf SL26_filt.vcf.gz
+```
+
+let's give this another go now:
+
+```bash
+time python analysis/filtering/filter_candidate_muts.py \
+--vcf data/alignments/genotyping/UG/combined/SL26_filt.vcf.gz \
+--gq 30 --out_format table --vcf_type pairs \
+--verbose_level 1 --single_sample S26 \
+--out SL26_test.tsv
+```
+
+this also doesn't quite do it - 179k matches! 
+
+wait - the best way here would just be to make a VCF with just the S lines as
+well as SL26 - and if there's something in `SL26_5` that's also not in the others
+that ought to help narrow things down
+
+```bash
+cd data/alignment/genotyping/UG/combined
+touch samples.txt # contains S samples and SL26_5 on separate lines
+bcftools view -S samples.txt SL26_combined.vcf.gz > SL26_all_salt.vcf
+# took just under 11 minutes
+
+bgzip SL26_all_salt.vcf
+tabix -p vcf SL26_all_salt.vcf.gz
+
+time python analysis/filtering/filter_candidate_muts.py \
+--vcf data/alignments/genotyping/UG/combined/SL26_all_salt.vcf.gz \
+--gq 30 --out_format table --vcf_type combined \
+--verbose_level 1 --single_sample S26 \
+--out SL26_all_test.tsv
+```
+
+12 matches! that seems a lot closer to what I'd expect given
+the other samples
+
+redoing with GQ20 - and then I do this for HC as well for the indels
+
+```bash
+cd data/alignment/genotyping/HC/combined
+touch samples.txt # from UG/combined
+bcftools view -S samples.txt SL26_combined.vcf.gz > SL26_all_salt.vcf
+# took just under 11 minutes
+
+bgzip SL26_all_salt.vcf
+tabix -p vcf SL26_all_salt.vcf.gz
+
+time python analysis/filtering/filter_candidate_muts.py \
+--vcf data/alignments/genotyping/HC/combined/SL26_all_salt.vcf.gz \
+--gq 30 --out_format table --vcf_type combined \
+--verbose_level 1 --single_sample S26 \
+--out SL26_HC_test.tsv
+```
+
+## 7/6/2021
+
+looking at the SL26 mutations, it looks like there are 2 SNMs in the UG
+output and none in the HC (which just has 11 indels instead)
+
+
 

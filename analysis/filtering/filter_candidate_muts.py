@@ -19,30 +19,32 @@ from tqdm import tqdm
 def args():
     parser = argparse.ArgumentParser(
         description='filter SNMs in UG VCF output', 
-        usage='python3.5 filter_candidate_muts.py [options]')
+        usage='python filter_candidate_muts.py [options]')
 
     parser.add_argument('-v', '--vcf', required=True,
-                        type=str, help='VCF to filter (.vcf.gz)')
+        type=str, help='VCF to filter (.vcf.gz)')
     parser.add_argument('-g', '--gq', required=False, default=30,
-                        type=int, help='GQ threshold (default 30)')
+        type=int, help='GQ threshold (default 30)')
     parser.add_argument('-f', '--out_format', required=False, default='vcf',
-                        type=str, help='VCF format or tabular format? \
-                        ([table|vcf] - default VCF)') 
+        type=str, help='VCF format or tabular format? ([table|vcf] - default VCF)') 
     parser.add_argument('-t', '--vcf_type', required=True,
-                        type=str, help="VCF type ('combined' or 'pairs')")
+        type=str, help="VCF type ('combined' or 'pairs')")
     parser.add_argument('-l', '--verbose_level', required=False, default=2,
-                        type=int, help='verbose level (0=none, 1=low, 2=all)')
-    parser.add_argument('-p', '--purity_filter', required=False, action='store_true', 
-                        help='enable alt allele purity filter')
+        type=int, help='verbose level (0=none, 1=low, 2=all)')
+    parser.add_argument('-p', '--purity_filter', required=False, 
+        action='store_true', help='enable alt allele purity filter')
+    parser.add_argument('-s', '--single_sample', required=False,
+        type=str, help='which sample to compare 0 or 5 against if only one') 
     parser.add_argument('-o', '--out', required=True,
-                        type=str, help='File to write to')
+        type=str, help='File to write to')
 
     args = parser.parse_args()
 
     return args.vcf, args.gq, args.out_format, args.vcf_type, \
-        args.verbose_level, args.purity_filter, args.out
+        args.verbose_level, args.purity_filter, args.single_sample, args.out
 
-def check_record(record, vcf_type, sample_lookup, gq, purity_filter=False):
+def check_record(record, vcf_type, sample_lookup, gq, 
+    single_sample, purity_filter=False):
     '''
 
     Function checks for mutations that fulfill filters:
@@ -64,6 +66,10 @@ def check_record(record, vcf_type, sample_lookup, gq, purity_filter=False):
     purity_filter : bool
         if enabled, will filter out records where mutated site
         has >2 reads of non mut allele
+    single_sample : str
+        if enabled, will assume there is only one sample of interest
+        in the VCF (e.g. just one of 0 and 5) and use provided sample as
+        the 'pair'
 
     Returns
     ------
@@ -105,15 +111,33 @@ def check_record(record, vcf_type, sample_lookup, gq, purity_filter=False):
             return False
     elif vcf_type == 'combined':
         if record.genotypes[idx_0] != record.genotypes[idx_5]:
-            sample_0_gt_count = record.genotypes.count(record_genotypes[idx_0])
-            sample_5_gt_count = record.genotypes.count(record_genotypes[idx_5])
-            if min(sample_0_gt_count, sample_5_gt_count) > 1:
-                return 'doublemut'
+            if not single_sample:
+                sample_0_gt_count = record.genotypes.count(record.genotypes[idx_0])
+                sample_5_gt_count = record.genotypes.count(record.genotypes[idx_5])
+                if min(sample_0_gt_count, sample_5_gt_count) > 1:
+                    return 'doublemut'
+            elif single_sample:
+                sample_5_gt_count = record.genotypes.count(record.genotypes[idx_5])
+                if sample_5_gt_count > 1: # only check 0/5 sample
+                    return 'doublemut'
+            if len(set(record.gt_bases)) == 1: # skip if all samples have same call
+                return False
+        elif record.genotypes[idx_0] == record.genotypes[idx_5]:
+            return False
+    """
+    elif single_sample:
+        if vcf_type == 'pairs':
+            raise Exception('pairs mode selected with single sample - exiting')
+        sample_gt_count = record.genotypes.count(record.genotypes[idx])
+        if sample_gt_count > 2:
+            return 'doublemut'
+    """
 
     # only runs if all checks passed, unless double mutation
     return True
 
-def parse_records(vcf, gq, out_format, vcf_type, verbose_level, purity_filter, out):
+def parse_records(vcf, gq, out_format, vcf_type, verbose_level, 
+    purity_filter, single_sample, out):
     '''
     Iterates through VCF and writes records passing above
     filters to file.
@@ -138,6 +162,10 @@ def parse_records(vcf, gq, out_format, vcf_type, verbose_level, purity_filter, o
     purity_filter : bool
         if enabled, will filter out records where mutated site
         has >2 reads of non mut allele (see check_record)
+    single_sample : bool
+        if enabled, will assume there is only one sample of interest
+        in the VCF (e.g. just one of 0 and 5) - also assumes 'combined' mode
+        
     out : str
         Name of file to write to
 
@@ -146,23 +174,42 @@ def parse_records(vcf, gq, out_format, vcf_type, verbose_level, purity_filter, o
     None
         Writes to specified file.
     '''
+    print(f'the verbose level is {verbose_level}')
     vcf_in = VCF(vcf)
     sample_names = vcf_in.samples
     pair_sample_names = sorted([item for item in sample_names if item.endswith('_0')
             or item.endswith('_5')])
+    if single_sample:
+        try:
+            assert len(pair_sample_names) == 1
+        except AssertionError as e:
+            print(f'[saltMA] ERROR: samples bonked - {pair_sample_names}')
+            print('[saltMA] Exiting...')
+            sys.exit()
+
 
     # get samples
     try:
-        sample_lookup = sample_names.index(pair_sample_names[0]), sample_names.index(pair_sample_names[1])
+        if not single_sample:
+            sample_lookup = sample_names.index(pair_sample_names[0]), \
+                sample_names.index(pair_sample_names[1])
+        elif single_sample:
+            shortlist = [s for s in sample_names if single_sample in s
+                        and s != pair_sample_names[0]]
+            sample_lookup = sample_names.index(shortlist[0]), \
+                sample_names.index(pair_sample_names[0])
+            print(f'[saltMA] selected samples are {pair_sample_names[0]} and {shortlist[0]}')
     except IndexError as e:
         print('[saltMA] ERROR: Samples seem incorrect. '
-              'Ensure you have a 0 and 5 sample in the VCF.')
+              'Ensure you have a 0 and 5 sample in the VCF, '
+              'unless --single_sample has been selected.')
         print('[saltMA] Exiting...')
         sys.exit()
 
-    print('[saltMA] initiating filtering for {}...'.format(os.path.basename(vcf)))
+    print(f'[saltMA] initiating filtering for {os.path.basename(vcf)}...')
     counter = 0
     total_count = 0
+    doublemut_count = 0
     prev_chr = None
 
     if out_format == 'vcf':
@@ -177,23 +224,31 @@ def parse_records(vcf, gq, out_format, vcf_type, verbose_level, purity_filter, o
 
     for record in tqdm(vcf_in):
         total_count += 1
-        check = check_record(record, vcf_type, sample_lookup, gq=gq, purity_filter=purity_filter)
+        check = check_record(record, vcf_type, sample_lookup, 
+            gq=gq, purity_filter=purity_filter, single_sample=single_sample)
         if check == 'doublemut':
-            tqdm.write('[saltMA] doublemut at {}:{}'.format(record.CHROM, record.POS))
-            continue
+            if verbose_level == 2:
+                tqdm.write(f'[saltMA] doublemut at {record.CHROM}:{record.POS}')
+                doublemut_count += 1
+                continue
+            else:
+                doublemut_count += 1
+                continue
         elif check:
             counter += 1
             if verbose_level == 1:
                 if not prev_chr:
                     prev_chr = record.CHROM
+                    tqdm.write(f'[saltMA] first chrom with detected mut is {prev_chr}')
                     continue
                 elif prev_chr != record.CHROM:
-                    tqdm.write('[saltMA] {} completed.'.format(prev_chr))
-                    tqdm.write('[saltMA] current count is {}'.format(counter))
+                    tqdm.write(f'[saltMA] {prev_chr} completed.')
+                    tqdm.write(f'[saltMA] current count is {counter}')
                     prev_chr = record.CHROM
             elif verbose_level == 2:
-                tqdm.write('[saltMA] candidate mut found at {}'.format(record.__repr__()))
-                tqdm.write('[saltMA] current count is {}'.format(counter))
+                tqdm.write(f'[saltMA] candidate mut found at {record.__repr__()}')
+                tqdm.write(f'[saltMA] current count is {counter}')
+                tqdm.write(f'[saltMA] doublemut count is {doublemut_count}')
             if out_format == 'vcf':
                 outfile.write_record(record)
             elif out_format == 'table':
@@ -205,9 +260,8 @@ def parse_records(vcf, gq, out_format, vcf_type, verbose_level, purity_filter, o
     if out_format == 'table':
         f.close()
 
-    print('[saltMA] completed search for {}'.format(os.path.basename(vcf)))
-    print('[saltMA] found {} matches over {} sites.'.format(counter,
-        total_count))
+    print(f'[saltMA] completed search for {os.path.basename(vcf)}')
+    print(f'[saltMA] found {counter} matches over {total_count} sites.')
 
 
 def main():
