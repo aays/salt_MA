@@ -81,11 +81,6 @@ def parse_line(line_dict, vcf) -> dict:
     -------
     out_dict : dict
         output dict passed to csv.DictWriter with triplet info
-
-    Raises
-    -----
-    ValueError
-        if triplet unable to be correctly read (e.g. due to indel)
     """
     out_dict = {}
     chrom, pos = line_dict['chromosome'], line_dict['position']
@@ -108,8 +103,7 @@ def parse_line(line_dict, vcf) -> dict:
     try:
         assert len(bases) == 3
     except:
-        print(bases, chrom, pos)
-        raise ValueError(f'could not parse triplet at {chrom} {pos}: {bases}')
+        return None # could not parse triplet
 
     # assemble triplet strings
     triplet_new = ''
