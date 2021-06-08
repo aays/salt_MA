@@ -12,6 +12,7 @@ import vcf # pyvcf, not cyvcf2
 import argparse
 from tqdm import tqdm
 from Bio import SeqIO
+from cyvcf2 import VCF # specifically for mutant sample determination
 
 def args():
     parser = argparse.ArgumentParser(
@@ -69,7 +70,6 @@ def describe_mut(d_in, vcf_path, ref_fasta, ant_file, pop_vcf_file) -> dict:
     # create mutation.mutation object
     fname = d_in['fname']
     vcf_file = glob(vcf_path + fname.replace('samples', '') + '*.vcf.gz')[0] # ugh
-    tqdm.write(vcf_file)
     chrom = d_in['chrom']
     pos = int(d_in['pos'])
     mut = mutation.mutation(chrom, pos)
@@ -86,16 +86,59 @@ def describe_mut(d_in, vcf_path, ref_fasta, ant_file, pop_vcf_file) -> dict:
     d['MQ'] = d_in['MQ']
 
     # mut properties
-    try:
-        d['mutation'] = '>'.join(mut.mutation(vcf_file, mut_quality=10))
-    except:
-        print(fname)
-        print(chrom, pos)
-        print(mut.vcf_record(vcf_file))
-        print(mut.vcf_record(vcf_file).samples)
-        print(chrom, pos, d_in['fname'])
     d['type'] = mut.mutation_type(vcf_file)
-    d['mutant_sample'] = mut.mutant_sample(vcf_file, mut_quality=10)
+    vcf_reader = VCF(vcf_file)
+    vcf_rec = [rec for rec in vcf_reader(f'{chrom}:{pos}-{pos}')
+              if rec.POS == pos][0]
+
+    # use fname to get sample and 0 and 5 names
+    if not '41' in fname:
+        sample = [fname.replace('samples', '') + str(n) for n in [0, 5]]
+    elif fname.startswith('DL41'): # have to hardcode this for now...
+        sample = ['DL41_0', 'DL46_5']
+    elif fname.startswith('DL46'):
+        sample = ['DL46_0', 'DL41_5']
+
+    # assign mut and determine mut sample
+    idx_0, idx_5 = vcf_reader.samples.index(sample[0]), vcf_reader.samples.index(sample[1])
+    base_0 = vcf_rec.gt_bases[idx_0][0]
+    base_5 = vcf_rec.gt_bases[idx_5][0]
+    gt_0_count = list(vcf_rec.gt_bases).count(vcf_rec.gt_bases[idx_0])
+    gt_5_count = list(vcf_rec.gt_bases).count(vcf_rec.gt_bases[idx_5])
+    if gt_0_count < gt_5_count: # 0 sample is the mutant
+        d['mutant_sample'] = sample[0]
+        d['mutation'] = '>'.join([base_5, base_0])
+    elif gt_0_count > gt_5_count: # 5 sample is the mutant
+        d['mutant_sample'] = sample[1]
+        d['mutation'] = '>'.join([base_0, base_5])
+    elif gt_0_count == gt_5_count:
+        tqdm.write(f"[saltMA] WARNING: this probably shouldn't happen - see {sample} {chrom} {pos}")
+        tqdm.write('[saltMA] trying to resolve using ancestry...')
+
+        # try to solve using ancestry
+        if fname.startswith('D'):
+            sub_samples = [s for s in vcf_reader.samples 
+                           if 'D' in s and s not in sample]
+        elif fname.startswith('S'):
+            sub_samples = [s for s in vcf_reader.samples 
+                           if 'S' in s and s not in sample]
+        elif fname.startswith('C'):
+            sub_samples = [s for s in vcf_reader.samples 
+                           if 'CC' in s and s not in sample]
+        sub_indices = [vcf_reader.samples.index(s) for s in sub_samples]
+        sub_genotypes = [vcf_rec.gt_bases[idx] for idx in sub_indices]
+        sub_0_count = sub_genotypes.count(vcf_rec.gt_bases[idx_0])
+        sub_5_count = sub_genotypes.count(vcf_rec.gt_bases[idx_5])
+        if sub_0_count < sub_5_count:
+            d['mutant_sample'] = sample[0]
+            d['mutation'] = '>'.join([base_5, base_0])
+            tqdm.write('resolved')
+        elif sub_0_count > sub_5_count:
+            d['mutant_sample'] = sample[1]
+            d['mutation'] = '>'.join([base_0, base_5])
+            tqdm.write('[saltMA] resolved')
+        elif sub_0_count == sub_5_count:
+            raise Exception(f'could not solve mut with ancestry - {sample} {chrom} {pos}')
 
     # purity
     purity = mut.purity(vcf_file)
@@ -192,6 +235,7 @@ def parse_muts(fname, vcf_path, ref_fasta, ant_file, pop_vcf_file, outname) -> N
             total_lines += 1
 
     with open(outname, 'w', newline='') as f_out:
+        print(f'[saltMA] starting mut describer - reading from {fname}')
         writer = csv.DictWriter(f_out, fieldnames=fieldnames, delimiter='\t')
         writer.writeheader()
         with open(fname, 'r', newline='') as f_in:
@@ -200,6 +244,7 @@ def parse_muts(fname, vcf_path, ref_fasta, ant_file, pop_vcf_file, outname) -> N
                 mut_dict = describe_mut(mut, vcf_path, ref_fasta, ant_file, pop_vcf_file)
                 if mut_dict:
                     writer.writerow(mut_dict)
+        print(f'[saltMA] done - written to {outname}')
         
 def main():
     parse_muts(*args())

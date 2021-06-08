@@ -2296,5 +2296,99 @@ time python analysis/filtering/filter_candidate_muts.py \
 looking at the SL26 mutations, it looks like there are 2 SNMs in the UG
 output and none in the HC (which just has 11 indels instead)
 
+final task for the SNM dataset then - updating the mut describer output
+so that it correctly identifies whether the 0 or 5 sample was mutated
+(since in the case of recurrent muts it's been picking wt/S/D lines instead)
+
+perhaps the simplest (albeit ugliest) way to do this is to make a copy of
+the mut tables and then use the multi muts spreadsheet to manually edit in
+the correct mutations
+
+```bash
+time python analysis/filtering/mut_describer.py \
+--fname data/mutations/mut_tables/filtered_muts.tsv \
+--vcf_path data/alignments/genotyping/UG/combined \
+--ref_fasta data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+--ant_file data/references/annotation_table.txt.gz \
+--outname data/mutations/mut_describer/muts_described.tsv
+```
+
+looking at these muts in python:
+
+```python
+import csv
+with open('data/mutations/mut_describer/muts_described.tsv', 'r') as f:
+    reader = csv.DictReader(f, delimiter='\t')
+    lines = [line for line in reader if line['mutant_sample][-2:] not in ['_0', '_5']]
+len(lines) # 35
+```
+
+time to make these manual edits - ugh
+
+```bash
+cp -v data/mutations/mut_describer/muts_described.tsv \
+data/mutations/mut_describer/muts_described.corrected.tsv
+```
+
+fixed manually - but while I was doing that, noticed that mut describer
+was getting all the mutant samples backwards for some reason (picking the 0
+sample instead of the 5 and vice versa) - for example:
+
+```python
+>>> region
+[Variant(chromosome_5:1737824 G/T), Variant(chromosome_5:1737825 G/T)]
+>>> region[0].gt_bases
+/home/hasans11/.conda/env/work/bin/ptpython:1: DeprecationWarning: In future, it will be an error for 'np.bool_' scalars to be interpreted as an index
+  #!/home/hasans11/.conda/env/work/bin/python3.6
+array(['G/G', 'G/G', 'G/G', 'G/G', 'G/G', 'G/G', 'G/G', 'G/G', './.',
+       './.', 'G/G', 'G/G', 'G/G', 'G/G', 'G/G', 'G/G', 'G/G', 'T/T',
+       'G/G', 'G/G', 'G/G', 'G/G', 'G/G'], dtype='<U3')
+
+>>> v.samples
+['./D1-1/', './D1-2', './D1-3', './D2-1', './D2-2/', './D2-3/', './S21/', './S23/', './S24', './S25/', './S26/', './S27/', './S29', './S30/', './S31/', './S33/', 'CC124', 'CC1373_0', 'CC1373_5', 'CC1690', 'CC1952', 'CC2343', 'CC2935']
+
+>>> v.samples.index('CC1373_0')
+17
+
+>>> region[0].gt_bases[17]
+'T/T'
+
+```
+
+going to update mut describer with my own code to determine the mutant
+sample off the combined VCF - once that's done, I'll have to ONCE AGAIN manually
+add the changed lines with the multi muts - might need to make a quick and dirty
+script to automate that because like hell am I going to be doing that
+manually again
+
+```bash
+time python analysis/filtering/mut_describer.py \
+--fname data/mutations/mut_tables/filtered_muts.tsv \
+--vcf_path data/alignments/genotyping/UG/combined \
+--ref_fasta data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+--ant_file data/references/annotation_table.txt.gz \
+--outname mut_describer_fix_test.tsv
+```
+
+shoot - need to fix handling of `DL41_46` type samples - but so far
+the calls look correct! 
+
+## 8/6/2021
+
+also updated the mutation code so that the `X>Y` column is calculated
+here instead of relying on the `mutation` class
+
+```bash
+time python analysis/filtering/mut_describer.py \
+--fname data/mutations/mut_tables/filtered_muts.tsv \
+--vcf_path data/alignments/genotyping/UG/combined \
+--ref_fasta data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+--ant_file data/references/annotation_table.txt.gz \
+--outname mut_describer_fix_test.tsv
+```
+
+took a decent bit of debugging and basically rewriting the sample
+determination algorithm even more but this looks good! now
+to combine this with the edited file that takes multi muts into consideration
 
 
