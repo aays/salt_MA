@@ -2391,4 +2391,81 @@ took a decent bit of debugging and basically rewriting the sample
 determination algorithm even more but this looks good! now
 to combine this with the edited file that takes multi muts into consideration
 
+wait - has this already assigned all the multi muts correctly? 
 
+```python
+import csv
+
+with open('data/mutations/mut_tables/multi_muts.tsv', 'r') as f:
+    multi_lines = [line for line in csv.DictReader(f, delimiter='\t')]
+
+with open('data/mutations/mut_describer/muts_described.corrected.tsv', 'r') as f:
+    recs_old = [line for line in csv.DictReader(f, delimiter='\t')]
+
+with open('mut_describer_fix_test.tsv', 'r') as f:
+    recs_new = [line for line in csv.DictReader(f, delimiter='\t')]
+
+multi_lookup = [[d['chrom'], d['pos']] for d in multi_lines]
+
+for i, rec in enumerate(recs_old):
+    lookup = [rec['chromosome'], rec['position']]
+    if lookup in multi_lookup:
+        rec_new = [r for r in recs_new 
+                   if [r['chromosome'], r['position']] == lookup][0]
+    else:
+        continue
+    if rec == rec_new:
+        continue
+    else:
+        print(i)
+        x, y = rec, rec_new
+        break
+```
+
+looking through these, the only sus one is `chromosome_15:411424`, since all
+the S lines have the same mutation but all the D lines appear to be ref - though
+there are no GQs for the D lines so who's to say 
+
+going to leave the call as is for now - here are the three for reference:
+
+```python
+>>> [(r[0]['chromosome'], r[0]['position']) for r in recs]
+[('chromosome_9', '6528023'), ('chromosome_4', '2553026'), ('chromosome_15', '411424')]
+```
+
+for the others - did the OG mut describer get them _all_ backwards? 
+
+```python
+recs = []
+counter = 0
+total_counter = 0
+for i, rec in enumerate(recs_old):
+    lookup = [rec['chromosome'], rec['position']]
+    if lookup not in multi_lookup: # looking at non multis
+        rec_new = [r for r in recs_new 
+                   if [r['chromosome'], r['position']] == lookup][0]
+    else:
+        continue
+    total_counter += 1
+    if rec['mutant_sample'] == rec_new['mutant_sample']:
+        continue
+    else:
+        counter += 1
+        print(i)
+        x, y = rec, rec_new
+```
+
+4 records where the mutant sample was actually correctly assigned -
+
+```python
+>>> [(r[0]['mutant_sample'], r[0]['chromosome'], r[0]['position']) for r in recs]
+[('DL51_0', 'chromosome_2', '3439475'), ('DL51_5', 'scaffold_18', '267295'), ('DL51_5', 'scaffold_18', '267304'), ('DL55_0', 'chromosome_17', '5888897')]
+```
+
+but otherwise looks like the new script did the job - going to move this file
+
+```bash
+mv -v mut_describer_fix_test.tsv data/mutations/mut_describer/muts_described.final.tsv
+```
+
+and I'll be moving forward with this! 
