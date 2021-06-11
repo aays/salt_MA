@@ -135,3 +135,96 @@ time python analysis/spectrum_context/get_triplets.py \
 --vcf data/spectrum_context/adaptation/salt_aligned_salt_UG_diploid.vcf.gz \
 --out data/spectrum_context/triplets/unique_salt_muts.tsv
 ```
+
+## 9/6/2021
+
+to do on the triplets front:
+- saltMA triplets
+- are we considering shared mutations? 
+
+point 1 is probably easier to deal with so let's start with that -
+need to update `get_triplets.py` to handle the sample setup for the saltMA
+lines correctly
+
+by the looks of the code, this should work as is for the pairs files - let's
+give it a go with CC1373 -
+
+```bash
+time python analysis/spectrum_context/get_triplets.py \
+--fname data/mutations/mut_describer/muts_described.final.tsv \
+--vcf data/alignments/genotyping/UG/pairs/CC1373_samples.vcf.gz \
+--out trip_test.tsv
+```
+
+looks good! going to have to run a loop for this though, and I think
+I'll have to handle `DL41_46` separately
+
+let's do all the others first:
+
+```bash
+for sample in 1373 1952 2342 2344 2931 2935 2937; do
+    time python analysis/spectrum_context/get_triplets.py \
+    --fname data/mutations/mut_describer/muts_described.final.tsv \
+    --vcf data/alignments/genotyping/UG/pairs/CC${sample}_samples.vcf.gz \
+    --out data/spectrum_context/triplets/CC${sample}_saltMA.tsv;
+done
+```
+
+looks good - now for the DL lines:
+
+```bash
+for sample in 40 51 53 55 57 58; do
+    time python analysis/spectrum_context/get_triplets.py \
+    --fname data/mutations/mut_describer/muts_described.final.tsv \
+    --vcf data/alignments/genotyping/UG/pairs/DL${sample}_samples.vcf.gz \
+    --out data/spectrum_context/triplets/DL${sample}_saltMA.tsv;
+done
+```
+
+the two SL:
+
+```bash
+for sample in 27 29; do
+    time python analysis/spectrum_context/get_triplets.py \
+    --fname data/mutations/mut_describer/muts_described.final.tsv \
+    --vcf data/alignments/genotyping/UG/pairs/SL${sample}_samples.vcf.gz \
+    --out data/spectrum_context/triplets/SL${sample}_saltMA.tsv;
+done
+```
+
+combining the MA and saltMA files into two separate 'master' files:
+
+```R
+# in data/spectrum_context/triplets/
+library(tidyverse)
+library(fs)
+
+salt_fnames = dir_ls('.', regexp = '\\w+saltMA\\.tsv')
+MA_fnames = dir_ls('.', regexp = '\\w+_MA\\.tsv')
+
+d_salt = map_dfr(salt_fnames, read_tsv, col_types = cols())
+d_MA = map_dfr(MA_fnames, read_tsv, col_types = cols())
+
+write_tsv(d_salt, 'salt_all.tsv')
+write_tsv(d_MA, 'MA_all.tsv')
+```
+
+and I'm going to move everything except these two files and `unique_salt_muts.tsv`
+into a new subfolder, `triplets_indiv`
+
+```bash
+mkdir -p triplets_indiv/ # in same folder
+mv -v *MA.tsv triplets_indiv/
+```
+
+
+
+
+
+
+
+
+
+
+
+
