@@ -1778,4 +1778,349 @@ $ wc -l data/alignments/genotyping/UG/DL_test/*txt
 ```
 
 
+## 20/7/2020
+
+trying haplotypecaller again with the `--emitRefConfidence` option to see if that
+affects anything - though it seems to only work on one sample at a time
+
+testing:
+
+```bash
+time java -jar ./bin/GenomeAnalysisTK.jar \
+        -T HaplotypeCaller \
+        -R data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+        -I data/alignments/bam/CC1373_0.bam \
+        -L chromosome_1 \
+        -ploidy 2 \
+        --emitRefConfidence BP_RESOLUTION \
+        --output_mode EMIT_ALL_SITES \ 
+        --heterozygosity 0.02 \
+        --indel_heterozygosity 0.002 \
+        -o test.vcf
+```
+
+## 5/4/2021
+
+picking this up many moons later - need to get these invariant sites for
+our 'denominator' (e.g. the number of callable sites) - and
+GenotypeGVCFs is probably the actual way to do it! 
+
+```bash
+mkdir -p data/alignments/gvcfs/
+
+time /usr/bin/java -jar bin/GenomeAnalysisTK.jar \
+    -T HaplotypeCaller \
+    -R data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+    -I data/alignments/bam/CC1373_0.bam \
+    -L chromosome_1:1-1000000 \
+    -ploidy 2 \
+    --emitRefConfidence GVCF \
+    -variant_index_type LINEAR \ # required due to different gvcf indexing method
+    -variant_index_parameter 128000 \
+    -o test.g.vcf
+
+time /usr/bin/java -jar bin/GenomeAnalysisTK.jar \
+    -T HaplotypeCaller \
+    -R data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+    -I data/alignments/bam/CC1373_5.bam \
+    -L chromosome_1:1-1000000 \
+    -ploidy 2 \
+    --emitRefConfidence GVCF \
+    -variant_index_type LINEAR \ # required due to different gvcf indexing method
+    -variant_index_parameter 128000 \
+    -o test_2.g.vcf
+
+time /usr/bin/java -jar bin/GenomeAnalysisTK.jar \
+    -T GenotypeGVCFs \
+    -R data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+    --variant test.g.vcf \
+    --variant test_2.g.vcf \
+    -L chromosome_1:1-1000000 \
+    --includeNonVariantSites \
+    -o combined_test.vcf
+```
+
+so far so good - although it seems the combined file contains all 1m sites - going to have
+to keep an eye out to see how much 'dropoff' happens as we call more of each sample
+
+```bash
+mkdir -p data/alignments/genotyping/HC_invariant
+
+time /usr/bin/java -jar bin/GenomeAnalysisTK.jar \
+    -T HaplotypeCaller \
+    -R data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+    -I data/alignments/bam/CC1373_0.bam \
+    -ploidy 2 \
+    --emitRefConfidence GVCF \
+    -variant_index_type LINEAR \
+    -variant_index_parameter 128000 \
+    -o data/alignments/genotyping/gvcfs/CC1373_0.g.vcf
+
+time /usr/bin/java -jar bin/GenomeAnalysisTK.jar \
+    -T HaplotypeCaller \
+    -R data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+    -I data/alignments/bam/CC1373_5.bam \
+    -ploidy 2 \
+    --emitRefConfidence GVCF \
+    -variant_index_type LINEAR \
+    -variant_index_parameter 128000 \
+    -o data/alignments/genotyping/gvcfs/CC1373_5.g.vcf
+```
+
+I could parallelize this over regions like I did earlier, but it feels pretty
+extraneous right now - this mostly just needs to run in the background while
+I do other things
+
+quick temp script (should work for all except the DL41/46 samples)
+
+```bash
+sample=$1
+time /usr/bin/java -jar bin/GenomeAnalysisTK.jar \
+    -T HaplotypeCaller \
+    -R data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+    -I data/alignments/bam/${sample}_0.bam \
+    -ploidy 2 \
+    --emitRefConfidence GVCF \
+    -variant_index_type LINEAR \
+    -variant_index_parameter 128000 \
+    -o data/alignments/genotyping/gvcfs/${sample}_0.g.vcf
+
+time /usr/bin/java -jar bin/GenomeAnalysisTK.jar \
+    -T HaplotypeCaller \
+    -R data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+    -I data/alignments/bam/${sample}_5.bam \
+    -ploidy 2 \
+    --emitRefConfidence GVCF \
+    -variant_index_type LINEAR \
+    -variant_index_parameter 128000 \
+    -o data/alignments/genotyping/gvcfs/${sample}_5.g.vcf
+
+time /usr/bin/java -jar bin/GenomeAnalysisTK.jar \
+    -T GenotypeGVCFs \
+    -R data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+    --variant data/alignments/genotyping/gvcfs/${sample}_0.g.vcf \
+    --variant data/alignments/genotyping/gvcfs/${sample}_5.g.vcf \
+    --includeNonVariantSites \
+    -o data/alignments/genotyping/HC_invariant/${sample}.vcf
+```
+
+but I should wait for the 1373 ones to finish to make sure that they 
+actually look as intended before running this over all the others! 
+
+## 6/5/2021
+
+HC is done - took between 13-16 hours between the two samples
+
+now for the final step:
+
+```bash
+time /usr/bin/java -jar bin/GenomeAnalysisTK.jar \
+    -T GenotypeGVCFs \
+    -R data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+    --variant data/alignments/genotyping/gvcfs/CC1373_0.g.vcf \
+    --variant data/alignments/genotyping/gvcfs/CC1373_5.g.vcf \
+    --includeNonVariantSites \
+    -o data/alignments/genotyping/HC_invariant/CC1373.vcf
+```
+
+done in 30 min - looks like this 'contains all sites', but the INFO
+column lists sites without calls (`NCC=2`, or `NCC=1` if one missing)
+
+bgzipping and tabixing the combined file (it's 7.4 GB!) before continuing:
+
+I think I'll need the script to take in 0 or 5 as an arg - that way I
+can have two running at all times
+
+`gvcf_temp.sh`:
+
+```bash
+sample=$1
+line=$2
+
+time /usr/bin/java -jar bin/GenomeAnalysisTK.jar \
+    -T HaplotypeCaller \
+    -R data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+    -I data/alignments/bam/${sample}_${line}.bam \
+    -ploidy 2 \
+    --emitRefConfidence GVCF \
+    -variant_index_type LINEAR \
+    -variant_index_parameter 128000 \
+    -o data/alignments/genotyping/gvcfs/${sample}_${line}.g.vcf
+```
+
+followed by:
+
+```bash
+time bash gvcf_temp.sh CC1952 0
+time bash gvcf_temp.sh CC1952 5 # in separate shell
+```
+
+## 8/5/2021
+
+so apparently there was a typo..... I wrote `${lines}` instead of
+`${line}` in the final `-o` argument, which meant both the 0 and 5 files
+were written to the same gvcf...
+
+here we go again:
+
+```bash
+time bash gvcf_temp.sh CC1952 0
+```
+
+the server is being hammered right now, so I might not queue up the 5 file just yet
+
+## 9/5/2021
+
+queueing up 5 and 2342 0:
+
+```bash
+time bash gvcf_temp.sh CC1952 5
+time bash gvcf_temp.sh CC2342 0
+```
+
+## 10/5/2021
+
+next up:
+
+```bash
+time bash gvcf_temp.sh CC2342 5
+time bash gvcf_temp.sh CC2344 0
+```
+
+## 12/5/2021
+
+happy post-vax day!
+
+```bash
+time bash gvcf_temp.sh CC2344 5
+time bash gvcf_temp.sh CC2931 0
+```
+
+## 14/5/2021
+
+```bash
+time bash gvcf_temp.sh CC2931 5
+time bash gvcf_temp.sh CC2935 0
+```
+
+## 15/5/2021
+
+need to run CombineVariants for `DL41_46` and vice versa
+
+```bash
+for sample in DL41_46 DL46_41; do
+    time /usr/bin/java -jar ./bin/GenomeAnalysisTK.jar \
+    -T CombineVariants \
+    -R data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+    --variant ../alignments/genotyping/unified_genotyper/UG_diploid/dark_ancestors/dark_aligned_dark_UG_diploid.vcf.gz \
+    --variant ../alignments/genotyping/unified_genotyper/UG_diploid/salt/salt_aligned_salt_UG.diploid.vcf.gz \
+    --variant ../alignments/genotyping/unified_genotyper/UG_diploid/CC2935_diploid.UG.vcf.gz \
+    --variant ../alignments/genotyping/unified_genotyper/UG_diploid/wt_ancestors/wt_diploid.UG.vcf.gz \
+    --variant data/alignments/genotyping/UG/pairs/${sample}_samples.vcf.gz \
+    --o data/alignments/genotyping/UG/combined/${sample}_combined.vcf \
+    -genotypeMergeOptions UNSORTED;
+done
+```
+
+## 16/5/2021
+
+moving on:
+
+```bash
+# bgzip and tabix
+bgzip data/alignments/genotyping/UG/combined/DL41_46_combined.vcf
+bgzip data/alignments/genotyping/UG/combined/DL46_41_combined.vcf
+tabix -p vcf data/alignments/genotyping/UG/combined/DL41_46_combined.vcf.gz
+tabix -p vcf data/alignments/genotyping/UG/combined/DL46_41_combined.vcf.gz
+
+# and then the gvcf-ing continues
+time bash gvcf_temp.sh CC2935 5
+time bash gvcf_temp.sh CC2937 0
+```
+
+## 18/5/2021
+
+```bash
+time bash gvcf_temp.sh CC2937 5
+time bash gvcf_temp.sh DL40 0
+```
+
+## 19/5/2021
+
+DL40 was done in an hour and 40 minutes?? file looks legit,
+so I'm surprised it went so fast 
+
+```bash
+time bash gvcf_temp.sh DL40 5
+time bash gvcf_temp.sh DL41 0
+```
+
+## 20/5/2021
+
+seems the DLs are continuing the theme of being done in 1.5-2 hours
+
+```bash
+time bash gvcf_temp.sh DL41 5
+time bash gvcf_temp.sh DL46 0
+time bash gvcf_temp.sh DL46 5
+```
+
+shoot - I also have to CombineVariants the `HC/combined` files
+
+```bash
+for sample in DL41_46 DL46_41; do
+    time /usr/bin/java -jar ./bin/GenomeAnalysisTK.jar \
+    -T CombineVariants \
+    -R data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+    --variant ../alignments/genotyping/HC_diploid/anc_wt_HC/anc_wt_diploid.HC.variants.vcf.gz \
+    --variant ../alignments/genotyping/HC_diploid/all_dark_HC/all_dark_diploid.HC.variants.vcf.gz \
+    --variant ../alignments/genotyping/HC_diploid/all_SL_HC/allSL.diploid.HC.variants.vcf.gz \
+    --variant data/alignments/genotyping/HC/pairs/${sample}_samples.vcf.gz \
+    --o data/alignments/genotyping/HC/combined/${sample}_combined.vcf \
+    -genotypeMergeOptions UNSORTED;
+done
+```
+
+done in 7 min! 
+
+## 21/5/2021
+
+```bash
+time bash gvcf_temp.sh DL51 0
+time bash gvcf_temp.sh DL51 5
+```
+
+## 22/5/2021
+
+```bash
+time bash gvcf_temp.sh DL53 0
+time bash gvcf_temp.sh DL53 5
+```
+
+## 23/5/2021
+
+```bash
+time bash gvcf_temp.sh DL55 0
+time bash gvcf_temp.sh DL55 5
+time bash gvcf_temp.sh DL57 0
+time bash gvcf_temp.sh DL57 5
+```
+
+## 24/5/2021
+
+```bash
+time bash gvcf_temp.sh DL58 0
+time bash gvcf_temp.sh DL58 5
+time bash gvcf_temp.sh SL26 5 # no 0
+time bash gvcf_temp.sh SL27 0
+time bash gvcf_temp.sh SL27 5
+```
+
+seems the SL lines took longer, interestingly enough (10 hrs for 26,
+4.5 hrs for SL27 0)
+
+
+
+
+
 
