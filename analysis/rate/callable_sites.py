@@ -17,7 +17,7 @@ def args():
         usage='python callable_sites.py [options]')
 
     parser.add_argument('-d', '--gvcf_dir', required=True,
-        type=str, help='Dir with GVCF files')
+        type=str, help='Dir with gVCF files')
     parser.add_argument('-o', '--out', required=True,
         type=str, help='File to write to')
 
@@ -51,47 +51,56 @@ def get_chr_lengths(vcf_reader) -> dict:
     lengths = {l[0]: int(l[1]) for l in keyvals}
     return lengths
 
-def get_site_calls(samples, gvcf_dir, chrom, pos) -> dict:
-    """get called status of each sample at input site
+def get_lookup(samples, gvcf_dir, chrom, start, end):
+    """create lookup strings for input region
 
-    checks VCFs across all given samples at a given site
-    to see whether calls exist
-
-    returns a lookup with 1 as value if site called and 0 if not
+    given a region L, creates a dict of length-L strings
+    denoting whether a given site is callable or not for a
+    given sample
 
     Parameters
     ----------
     samples : list
-        list of sample names (same as VCF filename prefixes)
+        sample names, corresponding to gVCF names
     gvcf_dir : str
         path to input gVCFs
     chrom : str
-        contig of interest
-    pos : int
-        position on contig
+        name of desired chromosome
+    start : int
+        start coordinate of region (1-indexed)
+    end : int
+        end coordinate of region (1-indexed)
 
     Returns
     -------
-    call_dict : dict
-        dict with call info for input to csv.DictWriter object
+    lookup : dict
+        dict containing lookup strings for each sample
     """
-    call_dict = {'chrom': chrom, 'pos': pos}
-    for sample in samples:
+    lookup = {}
+    tqdm.write(f'[saltMA] creating lookups for {chrom}:{start}-{end}')
+    for sample in tqdm(samples):
         fname = f'{gvcf_dir}{sample}.g.vcf.gz'
         reader = VCF(fname)
-        records = [rec for rec in reader(f'{chrom}:{pos}-{pos}')]
-        if len(records) == 1:
-            record = records[0]
-        else:
-            raise Exception(f'record bonked, {sample} {chrom} {pos}')
-        # cyvcf2 will return the nearest record rounding down...
-        # ... if no record is found in the desired range
-        if record.POS != pos:
-            call_dict[sample] = 0
-            continue # no call at this site
-        else:
-            call_dict[sample] = 1
-    return call_dict
+        lookup[sample] = ''
+        current_pos = start + 1
+        for record in reader(f'{chrom}:{start}-{end}'):
+            if record.POS == current_pos:
+                lookup[sample] += '1'
+                current_pos += 1
+            elif record.POS > current_pos:
+                to_add = record.POS - current_pos # goes to 0 if pos = curr + 1
+                str_to_add = '0' * to_add
+                lookup[sample] += str_to_add
+                lookup[sample] += '1'
+                current_pos = record.POS + 1
+        if current_pos < end: # add 'outer' 0s if stopped short of window end
+            to_add = end - current_pos + 1
+            str_to_add = '0' * to_add
+            lookup[sample] += str_to_add
+        elif current_pos == end:
+            lookup[sample] += '0'
+    return lookup
+            
 
 def parse_calls(gvcf_dir, out):
     """iterate through all sites and write per-sample called status to file
@@ -125,9 +134,21 @@ def parse_calls(gvcf_dir, out):
         writer.writeheader()
         for chrom in lengths: # use dict keys here
             print(f'[saltMA] processing {chrom}')
-            for pos in tqdm(range(1, lengths[chrom] + 1)):
-                call_dict = get_site_calls(samples, gvcf_dir, chrom, pos)
-                writer.writerow(call_dict)
+            total = lengths[chrom]
+            for window_start in tqdm(range(0, total, int(1e5))):
+                lookup = {}
+                if window_start + 1e5 > total:
+                    window_end = total
+                else:
+                    window_end = window_start + int(1e5) - 1
+                lookup = get_lookup(samples, gvcf_dir, chrom, window_start, window_end)
+                # print(window_start, window_end)
+                # print([[k, len(v)] for k, v in lookup.items()])
+                for i in range(window_end - window_start):
+                    call_dict = {k: v[i] for k, v in lookup.items()}
+                    call_dict['chrom'] = chrom
+                    call_dict['pos'] = window_start + i + 1
+                    writer.writerow(call_dict)
 
 def main():
     gvcf_dir, out = args()
