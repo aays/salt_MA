@@ -92,18 +92,29 @@ def describe_mut(d_in, vcf_path, ref_fasta, ant_file, pop_vcf_file) -> dict:
               if rec.POS == pos][0]
 
     # use fname to get sample and 0 and 5 names
-    if not '41' in fname:
-        sample = [fname.replace('samples', '') + str(n) for n in [0, 5]]
-    elif fname.startswith('DL41'): # have to hardcode this for now...
+    print(fname)
+    if fname.startswith('DL41'): # have to hardcode this for now...
         sample = ['DL41_0', 'DL46_5']
     elif fname.startswith('DL46'):
         sample = ['DL46_0', 'DL41_5']
+    elif fname.startswith('SL26'):
+        sample = [None, 'SL26_5']
+    else:
+        sample = [fname.replace('samples', '') + str(n) for n in [0, 5]]
 
     # assign mut and determine mut sample
-    idx_0, idx_5 = vcf_reader.samples.index(sample[0]), vcf_reader.samples.index(sample[1])
-    base_0 = vcf_rec.gt_bases[idx_0][0]
+    if sample[0]:
+        idx_0 = vcf_reader.samples.index(sample[0])
+        base_0 = vcf_rec.gt_bases[idx_0][0]
+        gt_0_count = list(vcf_rec.gt_bases).count(vcf_rec.gt_bases[idx_0])
+    else: # just for SL26
+        sample[0] = 'replace' # sigh
+        idx_0 = None
+        base_0 = d['ref']
+        gt_0_count = vcf_rec.num_hom_ref
+    # we always have a '5' sample
+    idx_5 = vcf_reader.samples.index(sample[1])
     base_5 = vcf_rec.gt_bases[idx_5][0]
-    gt_0_count = list(vcf_rec.gt_bases).count(vcf_rec.gt_bases[idx_0])
     gt_5_count = list(vcf_rec.gt_bases).count(vcf_rec.gt_bases[idx_5])
     if gt_0_count < gt_5_count: # 0 sample is the mutant
         d['mutant_sample'] = sample[0]
