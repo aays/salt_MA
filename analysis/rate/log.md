@@ -141,6 +141,65 @@ tabix works as intended!
 tabix all_callable.tsv.gz chromosome_2:1-2
 ```
 
-alright, next steps: rate calculations! 
+alright, next steps: rate calculations! from Rob's notes:
+
+- estimate rate overall 
+- estimate rate of SaltMA, MA, SaltAdaptation
+
+we already have the MA rates from Ness 2015 - I might have to do salt adaptation
+line calculations myself based on the previous mutation tables and 'callables' reports,
+while the saltMA rate should be doable once I have the generation time data from Rob
+
+going to put this on hold since the generation time data aren't ready yet - back
+to working on spectrum/context
+
+## 24/6/2021
+
+finally getting back on this after dealing with SL26 - managed to squeeze one good SNM out of that
+
+going to write a script that takes in a mut describer file and a callables lookup
+file to report per site rates - generations should also be a parameter there but I'll set
+that to 1 as default - though since generation time might be sample specific I might have
+to update that script to take in a lookup file
+
+the output format should look something like
+
+```
+sample chrom mutations callable_sites generations mut_rate
+```
+
+where 
+- `mutations` = absolute number of muts 
+- `callable_sites` = absolute number of callable sites
+- `generations` = number of generations muts were accumulated for
+- `mut_rate` = mutations / (callable sites * generations)
+
+the original MA files where Rob did something similar are instead structured like
+
+```
+window sample_1_muts sample_1_sitegens sample_1_mutrate sample_2_muts sample_2_sitegens ...
+```
+
+where `window` is a single column formatted like `chromosome_1:1-200000` - but given the saltMA
+mutation counts are far lower I think I can get away with entire-chromosome values, after which
+processing the data in R will let me convert the file to wide format if I need
+
+let's get this going - will call this script `calculate_rate.py` - though this will likely
+only work for the saltMA files on first pass
+
+maybe I'll need to create a new callables table off of the adaptation VCFs?? a problem
+for future me to figure out...
+ 
+wait - looks like the callable table wasn't made correctly - I'm missing every x * 1e5 value
+(eg 200000, 300000)
+
+found the bug I think - line 143 didn't need to `- 1` - rerunning and taking a break
+since this will take 2 hours! 
+
+```bash
+time python analysis/rate/callable_sites.py \
+--gvcf_dir data/alignments/genotyping/gvcfs/ \
+--out data/rate/all_callable_fix.tsv
+```
 
 
