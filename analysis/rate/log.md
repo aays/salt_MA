@@ -202,4 +202,15 @@ time python analysis/rate/callable_sites.py \
 --out data/rate/all_callable_fix.tsv
 ```
 
+## 25/6/2021
+
+took two hours again yesterday, but file looks good! although I forgot to correct the header again...
+
+```bash
+head -n 1 all_callable_fix.tsv > header.txt
+vim header.txt # add hash before chrom
+tail -n +2 all_callable_fix.tsv > all_callable_partial.tsv # took 30 sec
+cat header.txt all_callable_partial.tsv > all_callable.tsv
+```
+
 
