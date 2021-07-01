@@ -378,4 +378,57 @@ the salt genes look to be in `salt_lines/annotations/expression/` - `perrineau.g
 is the list of genes while `fpkm_per_transcript.gz` contains fpkm values (where anything
 >= 1 is considered an 'expressed gene')
 
+symlinking these files into `data/rate/gene_lists` and creating a list of just expressed genes:
+
+```python
+import gzip
+from tqdm import tqdm
+
+with open('expressed_genes.tsv', 'w') as f_out:
+    f_out.write('gene\tfpkm\n')
+    with open('fpkm_per_transcript.gz', 'rb') as f:
+        reader = gzip.GzipFile(fileobj=f)
+        for line in tqdm(reader):
+            gene, fpkm = line.decode('utf-8').rstrip('\n').split('\t')
+            if float(fpkm) >= 1:
+                f_out.write(line.decode('utf-8'))
+```
+
+need to get, for each strain:
+
+- number of 3D sites
+- number of 2D sites
+- number of 4D sites
+- number of NS callable sites (n0D + 1/3 n3D + 2/3 n2D)
+- number of S callable sites (n4D + 2/3 n3D + 1/3 n2D)
+
+the first three stats are technically 'constant' across strains - the only
+difference maker is callability of each site - going to need to iterate through
+both the annotation table and the callables table to get these values for
+the saltMA lines
+
+script should probably loop over the annotation table in chunks
+and keep counts - something like this:
+
+```
+d = # nested dict containing all samples as keys
+# nested dicts should have degeneracy (0D, 2D, etc) as keys
+for record in ant.Reader(chrom, window_start, window_end):
+    if record # check degeneracy
+        # increment counts in nested dict structure above if callable site exists
+        # (sample wise, of course)
+```
+
+trying it out:
+
+```bash
+time python analysis/rate/callable_sites_degeneracy.py \
+--callables_table data/rate/all_callable.tsv.gz \
+--annotation_table data/references/annotation_table.txt.gz \
+--outname degen_callables.tsv
+```
+
+
+
+
 
