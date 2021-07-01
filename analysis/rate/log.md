@@ -213,4 +213,169 @@ tail -n +2 all_callable_fix.tsv > all_callable_partial.tsv # took 30 sec
 cat header.txt all_callable_partial.tsv > all_callable.tsv
 ```
 
+back to getting rate calculations - the columns should again look like
+
+```
+sample chrom mutations callable_sites generations mut_rate
+```
+
+looks good, I think? no errors in the test run, so here goes -
+
+```bash
+time python analysis/rate/calculate_rate.py \
+--mut_table data/rate/mut_describer/muts_described.final.tsv \
+--callables_table data/rate/all_callable.tsv.gz \
+--vcf data/alignments/genotyping/UG/pairs/CC1373_samples.vcf.gz \
+--out rate_test.tsv
+```
+
+of course I forgot about SL29...damn it 
+
+## 28/6/2021
+
+alright, SL29 VCFs made - now to remake the callables file
+
+```bash
+bgzip data/alignments/genotyping/gvcfs/SL29_0.g.vcf
+tabix data/alignments/genotyping/gvcfs/SL29_0.g.vcf.gz
+bgzip data/alignments/genotyping/gvcfs/SL29_5.g.vcf
+tabix data/alignments/genotyping/gvcfs/SL29_5.g.vcf.gz
+
+time python analysis/rate/callable_sites.py \
+--gvcf_dir data/alignments/genotyping/gvcfs/ \
+--out data/rate/all_callable_fix.tsv
+```
+
+and now this can finally be run again:
+
+```bash
+time python analysis/rate/calculate_rate.py \
+--mut_table data/rate/mut_describer/muts_described.final.tsv \
+--callables_table data/rate/all_callable.tsv.gz \
+--vcf data/alignments/genotyping/UG/pairs/CC1373_samples.vcf.gz \
+--out rate_test.tsv
+```
+
+## 29/6/2021
+
+this will need to be rerun on indels once I've determined which to keep
+
+need to get adaptation rates next - but in the meantime, Rob
+mentions that I should set generations to 250
+
+I *could* technically do this in R working off of `rate_test.tsv` but let's
+just rerun the script for simplicity after adding the ability to give
+a single constant for all generations
+
+```bash
+time python analysis/rate/calculate_rate.py \
+--mut_table data/rate/mut_describer/muts_described.final.tsv \
+--callables_table data/rate/all_callable.tsv.gz \
+--vcf data/alignments/genotyping/UG/pairs/CC1373_samples.vcf.gz \
+--generation_count 250 \
+--out data/rate/saltMA_SNM_rate_250.tsv
+```
+
+hold on - I haven't been filtering the gvcfs for MQ > 24 and DP > 10 when making
+the callables table... time to remake this a third time?
+
+quick check:
+
+```python
+>>> from tqdm import tqdm
+>>> from cyvcf2 import VCF
+>>> reader = VCF('data/alignments/genotyping/gvcfs/CC1373_0.g.vcf.gz')
+>>> count, failed = 0, 0
+>>> for record in tqdm(reader):
+...     count += 1
+...     if record.INFO.get('MQ'):
+...         if record.INFO.get('MQ') < 24:
+...             failed += 1
+...     elif record.INFO.get('DP'):
+...         if record.INFO.get('DP') < 10:
+...             failed += 1
+26254928it [02:10, 201821.35it/s]
+>>> failed, count
+(3553, 27210555)
+```
+
+around 0.01% of sites, but I should still redo this... sigh
+
+```bash
+mkdir -p data/alignments/genotyping/filtered_gvcfs
+```
+
+and here's a quick and dirty script to filter the gvcfs:
+
+```python
+import sys
+import os
+import glob
+from cyvcf2 import VCF
+from cyvcf2 import Writer
+from tqdm import tqdm
+
+def filter_gvcf(vcf_name):
+    reader = VCF(vcf_name):
+    writer = Writer(vcf_name.replace('/gvcfs', '/filtered_gvcfs').rstrip('.gz'), reader)
+    writer.write_header()
+    count, failed = 0, 0
+    for record in tqdm(reader, desc=os.path.basename(vcf_name)):
+        count += 1
+        mq, dp = record.INFO.get('MQ'), record.INFO.get('DP')
+        passing = True
+        elif mq:
+            if mq < 24:
+                passing = False
+        elif dp:
+            if dp < 10:
+                passing = False
+        elif record.num_het != 0.0:
+            passing = False
+        if passing:
+            writer.write_record(record)
+        elif not passing:
+            failed += 1
+    print(vcf_fname, count, failed, failed / count)
+
+fnames = glob.glob('data/alignments/genotyping/gvcfs/*.gz')
+
+for fname in tqdm(fnames):
+    filter_gvcf(fname)
+```
+
+callable table v3:
+
+```bash
+time python analysis/rate/callable_sites.py \
+--gvcf_dir data/alignments/genotyping/gvcfs/ \
+--out data/rate/all_callable_fix.tsv
+```
+
+## 30/6/2021
+
+once more, after replacing the old callables file:
+
+```bash
+time python analysis/rate/calculate_rate.py \
+--mut_table data/rate/mut_describer/muts_described.final.tsv \
+--callables_table data/rate/all_callable.tsv.gz \
+--vcf data/alignments/genotyping/UG/pairs/CC1373_samples.vcf.gz \
+--generation_count 250 \
+--out data/rate/saltMA_SNM_rate_250.tsv
+```
+
+## 1/7/2021
+
+today - Ka/Ks calculations for saltMA
+
+need to get Ka/Ks genome wide, salt genes, and expressed genes
+
+before that even - I'll need to actually get lists of these salt genes and expressed genes
+to use in whatever script I end up writing
+
+the salt genes look to be in `salt_lines/annotations/expression/` - `perrineau.geneIDs.txt`
+is the list of genes while `fpkm_per_transcript.gz` contains fpkm values (where anything
+>= 1 is considered an 'expressed gene')
+
 

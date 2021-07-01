@@ -135,7 +135,7 @@ def parse_calls(gvcf_dir, out):
         for chrom in lengths: # use dict keys here
             print(f'[saltMA] processing {chrom}')
             total = lengths[chrom]
-            for window_start in tqdm(range(0, total, int(1e5))):
+            for window_start in tqdm(range(0, total, int(1e5)), desc=chrom):
                 lookup = {}
                 if window_start + 1e5 > total:
                     window_end = total
