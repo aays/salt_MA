@@ -428,6 +428,20 @@ time python analysis/rate/callable_sites_degeneracy.py \
 --outname degen_callables.tsv
 ```
 
+this is RIDICULOUSLY slow - crawls down to 300 it per second - redoing with the classic lookup strat
+(this is the most I've ever refactored a simple script, good lord)
+
+```bash
+time python analysis/rate/callable_sites_degeneracy.py \
+--callables_table data/rate/all_callable.tsv.gz \
+--annotation_table data/references/annotation_table.txt.gz \
+--outname degen_callables_lookup.tsv
+```
+
+this spends about ~30 sec max making a lookup and then ROCKETS through
+each chr in seconds flat - holy cow
+
+did the whole genome in 10 minutes flat! 
 
 
 
