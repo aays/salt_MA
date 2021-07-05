@@ -435,13 +435,75 @@ this is RIDICULOUSLY slow - crawls down to 300 it per second - redoing with the 
 time python analysis/rate/callable_sites_degeneracy.py \
 --callables_table data/rate/all_callable.tsv.gz \
 --annotation_table data/references/annotation_table.txt.gz \
---outname degen_callables_lookup.tsv
+--outname data/rate/degen_callables_lookup.tsv
 ```
 
 this spends about ~30 sec max making a lookup and then ROCKETS through
 each chr in seconds flat - holy cow
 
 did the whole genome in 10 minutes flat! 
+
+## 4/7/2021
+
+today - actually calculating Ka/Ks, and getting the bootstrap
+values too if we have time
+
+for each chromosome on each sample - need to get the number of 
+NS muts and S muts, and then combine that with `degen_callables_lookup.tsv`
+from earlier to get Ka/Ks 
+
+after getting this genomewide, need to do this for candidate genes and expressed
+genes - that'll have to be a check using the mut describer output against
+the previous list of Perrineau + expressed genes in `data/rate/gene_lists/`
+
+it occurs to me that the calculation for the genes likely
+requires a different set of callable site counts (e.g. from just the genes)
+
+it also occurs to me that I have to redo the triplets to separate 0 mutations
+from 5 mutations... but that's for a different log at a different time
+
+for now - first order of business - getting the number of S and NS 
+mutations per chromosome - going to create a script for this that
+can optionally take in a list of genes to work with
+
+calling it `syn_mut_count.py` for lack of a better name
+
+giving this a go:
+
+```bash
+mkdir -p data/rate/ka_ks
+mv -v data/rate/degen_callables_lookup.tsv data/rate/ka_ks
+
+time python analysis/rate/syn_mut_count.py \
+--mut_table data/mutations/mut_describer/muts_described.final.tsv \
+--out data/rate/ka_ks/syn_nonsyn_counts_genomewide.tsv
+```
+
+looks good - now for the Perrineau genes:
+
+```bash
+time python analysis/rate/syn_mut_count.py \
+--mut_table data/mutations/mut_describer/muts_described.final.tsv \
+--gene_file data/rate/gene_lists/perrineau_genes_only.txt \
+--out data/rate/ka_ks/syn_nonsyn_perrineau_counts.tsv
+```
+
+also good - though there's only two genes that apply! 
+
+finally, for the expressed genes - 
+
+```bash
+time python analysis/rate/syn_mut_count.py \
+--mut_table data/mutations/mut_describer/muts_described.final.tsv \
+--gene_file data/rate/gene_lists/expressed_genes.tsv \
+--out data/rate/ka_ks/syn_nonsyn_expressed_counts.tsv
+```
+
+looks good! next up - getting callable sites for these genes, before estimating
+Ka/Ks
+
+
+
 
 
 
