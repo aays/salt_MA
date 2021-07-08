@@ -502,6 +502,120 @@ time python analysis/rate/syn_mut_count.py \
 looks good! next up - getting callable sites for these genes, before estimating
 Ka/Ks
 
+## 5/7/2021
+
+today - getting callable site counts for the two gene sets (Perrineau and expressed) 
+
+the genomewide callable sites table (`all_callables.tsv.gz`) should suffice for genomewide Ka/Ks
+
+going to make a modified version of `callable_sites_degeneracy` that takes in a 
+gene list and returns counts of callable S and NS sites for each
+
+the main limiting factor here is how to efficiently look up the positions of these
+genes - I think I need a file that sorts them in order by chromosome too so that
+I could leverage `create_degen_lookup` from the earlier script
+
+```bash
+# after creating symlink to final.strict.GFF3 in data/references
+grep 'mRNA' data/references/final.strict.GFF3 > data/references/mRNA.GFF3
+grep 'gene' data/references/final.strict.GFF3 | grep -v 'mRNA' > data/references/genes.GFF3
+```
+
+possibly the greediest way to work with this is to store the list of genes of interest in
+memory and loop through the GFF, only keeping lines where a 'hit' is found
+
+I could likely do this in an interpreter:
+
+```python
+import csv
+from tqdm import tqdm
+
+# store gene list lookup in memory
+with open('data/rate/gene_lists/perrineau_genes_only.txt', 'r', newline='') as f:
+    gene_list = [l[0] for l in csv.reader(f, delimiter='\t')]
+
+with open('data/rate/gene_lists/perrineau_genes.gff3', 'w') as f_out:
+    writer = csv.writer(f_out, delimiter='\t')
+    with open('data/references/mRNA.GFF3', 'r', newline='') as f:
+        reader = csv.reader(f, delimiter='\t')
+        for line in tqdm(reader):
+            start, end = int(line[3]), int(line[4])
+            name_dict = {l.split('=')[0]: l.split('=')[1] for l in line[-1].split(';')} # nice
+            if any([gene_name in gene_list for gene_name in name_dict.values()]):
+                writer.writerow(line)
+```
+            
+and then again for the expressed genes:
+
+```python
+with open('data/rate/gene_lists/expressed_genes.tsv', 'r', newline='') as f:
+    gene_list = [l[0] for l in csv.reader(f, delimiter='\t')]
+
+with open('data/rate/gene_lists/expressed_genes.gff3', 'w') as f_out:
+    writer = csv.writer(f_out, delimiter='\t')
+    with open('data/references/mRNA.GFF3', 'r', newline='') as f:
+        reader = csv.reader(f, delimiter='\t')
+        for line in tqdm(reader):
+            start, end = int(line[3]), int(line[4])
+            name_dict = {l.split('=')[0]: l.split('=')[1] for l in line[-1].split(';')} # nice
+            if any([gene_name in gene_list for gene_name in name_dict.values()]):
+                writer.writerow(line)
+
+```
+
+looks good - now to get callable sites for each of these
+
+though it just occurs to me that this won't work for the perrineau genes, since
+only two actually have mutations and in both cases these are NS muts - meaning Ks would be 0! 
+
+calculating callable sites from these GFFs nonetheless - time for another quick
+script that'll take in a GFF and output the number of S and NS callable sites
+
+the output should look like:
+
+```
+gene_name start end total_syn total_nonsyn \
+sample_1_fold0 sample_1_fold2 sample_1_syn sample_1_nonsyn # etc
+```
+
+will call this `callable_genes_degeneracy.py` - there really needs to be a better way to name these...
+
+## 7/7/2021
+
+script is ready to go - mostly riffs off `callable_sites_degeneracy.py`
+
+though the other day I forgot I should just have `sample` as a separate column instead
+of having sample-specific columns... hooray for long format! 
+
+```bash
+time python analysis/rate/callable_genes_degeneracy.py \
+--callables_table data/rate/all_callable.tsv.gz \
+--gff data/rate/gene_lists/expressed_genes.gff3 \
+--annotation_table data/references/annotation_table.txt.gz \
+--outname data/rate/ka_ks/syn_nonsyn_expressed_callables.tsv
+```
+
+looks good - done in 8 min - though the outfile is 420k lines long! going to
+perhaps have to filter this down using grep or something similar
+
+now for the Perrineau for completeness' sake:
+
+```bash
+time python analysis/rate/callable_genes_degeneracy.py \
+--callables_table data/rate/all_callable.tsv.gz \
+--gff data/rate/gene_lists/perrineau_genes.gff3 \
+--annotation_table data/references/annotation_table.txt.gz \
+--outname data/rate/ka_ks/syn_nonsyn_perrineau_callables.tsv
+```
+
+also worked like a charm! 
+
+
+
+
+
+
+
 
 
 
