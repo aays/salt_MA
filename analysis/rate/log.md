@@ -375,8 +375,8 @@ before that even - I'll need to actually get lists of these salt genes and expre
 to use in whatever script I end up writing
 
 the salt genes look to be in `salt_lines/annotations/expression/` - `perrineau.geneIDs.txt`
-is the list of genes while `fpkm_per_transcript.gz` contains fpkm values (where anything
->= 1 is considered an 'expressed gene')
+is the list of genes while `fpkm_per_transcript.gz` contains fpkm values (where anything >= 1 
+is considered an 'expressed gene')
 
 symlinking these files into `data/rate/gene_lists` and creating a list of just expressed genes:
 
@@ -609,6 +609,215 @@ time python analysis/rate/callable_genes_degeneracy.py \
 ```
 
 also worked like a charm! 
+
+## 12/7/2021
+
+today - actually getting Ka/Ks values for these three gene sets
+
+probably the best way to go at this is just create 'combined' files that contain
+the following columns:
+
+for genome wide:
+
+```
+sample scaffold nonsyn_muts syn_muts nonsyn_callables syn_callables
+```
+
+for gene sets:
+
+```
+gene_name nonsyn_muts syn_muts nonsyn_callables syn_callables
+```
+
+in the case of gene sets, the gene counts are _not_ sample specific - so the
+callable values will need to be summed (since the gene counts are also summed
+across samples) 
+
+the genome one is small enough to join quickly in R:
+
+```R
+# in data/rate/ka_ks
+library(tidyverse)
+
+counts = read_tsv('syn_nonsyn_counts_genome.tsv', col_types = cols())
+callables = read_tsv('degen_callables_lookup.tsv', col_types = cols())
+
+final = left_join(counts, callables, by = c('sample', 'scaffold'))
+
+write_tsv(final, 'all_genome.tsv')
+```
+
+looks good - now to do this for the gene sets. given that the counts aren't sample specific,
+there needs to be some way to combine counts in some sensible way as opposed to
+storing 400k+ lines in memory
+
+I can think of a quick and dirty way come to think of it:
+
+```python
+import csv
+from tqdm import tqdm
+import numpy as np
+
+callables = {}
+
+with open('data/rate/ka_ks/syn_nonsyn_perrineau_callables.tsv', 'r', newline='') as f:
+    reader = csv.DictReader(f, delimiter='\t')
+    last_gene = None
+    keys = ['fold0', 'fold2', 'fold3', 'fold4', 'nonsyn', 'syn']
+    for line in tqdm(reader):
+        current_gene = line['gene_name']
+        if current_gene != last_gene:
+            last_gene = current_gene
+            callables[current_gene] = np.array([float(line[k]) for k in keys])
+        elif current_gene == last_gene:
+            current_vals = np.array([float(line[k]) for k in keys])
+            callables[current_gene] = np.add(callables[current_gene], current_vals) # done in a second!
+
+with open('data/rate/ka_ks/all_perrineau.tsv', 'w') as f_out:
+    with open('data/rate/ka_ks/syn_nonsyn_perrineau_counts.tsv', 'r', newline='') as f:
+        reader = csv.DictReader(f, delimiter='\t')
+        fieldnames = ['gene_name', 'nonsyn_muts', 'syn_muts']
+        fieldnames.extend(keys)
+        writer = csv.DictWriter(f_out, delimiter='\t', fieldnames=fieldnames)
+        writer.writeheader()
+        for line in tqdm(reader):
+            full_key = [k for k in callables.keys() if line['gene_name'] in k][0]
+            values = callables[full_key]
+            out_dict = {keys[i]: values[i] for i, colname in enumerate(keys)}
+            for key, value in line.items():
+                out_dict[key] = value
+            writer.writerow(out_dict) # also done in a second! 
+
+# redoing for expressed genes
+callables = {}
+
+with open('data/rate/ka_ks/syn_nonsyn_expressed_callables.tsv', 'r', newline='') as f:
+    reader = csv.DictReader(f, delimiter='\t')
+    last_gene = None
+    keys = ['fold0', 'fold2', 'fold3', 'fold4', 'nonsyn', 'syn']
+    for line in tqdm(reader):
+        current_gene = line['gene_name']
+        if current_gene != last_gene:
+            last_gene = current_gene
+            callables[current_gene] = np.array([float(line[k]) for k in keys])
+        elif current_gene == last_gene:
+            current_vals = np.array([float(line[k]) for k in keys])
+            callables[current_gene] = np.add(callables[current_gene], current_vals)
+
+with open('data/rate/ka_ks/all_expressed.tsv', 'w') as f_out:
+    with open('data/rate/ka_ks/syn_nonsyn_expressed_counts.tsv', 'r', newline='') as f:
+        reader = csv.DictReader(f, delimiter='\t')
+        fieldnames = ['gene_name', 'nonsyn_muts', 'syn_muts']
+        fieldnames.extend(keys)
+        writer = csv.DictWriter(f_out, delimiter='\t', fieldnames=fieldnames)
+        writer.writeheader()
+        for line in tqdm(reader):
+            full_key = [k for k in callables.keys() if line['gene_name'] in k][0]
+            values = callables[full_key]
+            out_dict = {keys[i]: values[i] for i, colname in enumerate(keys)}
+            for key, value in line.items():
+                out_dict[key] = value
+            writer.writerow(out_dict)
+
+```
+
+update - this is breaking for the expressed gene since `data/references/mRNA.gff3` doesn't have
+any of the NP genes for whatever reason
+
+```bash
+cd data/references/
+grep -c 'NP_' genes.GFF3 # 163
+grep -c 'NP_' mRNA.GFF3 # 0
+```
+
+going to do this quick and dirty addition:
+
+```bash
+# in data/references
+grep 'NP_' genes.GFF3 | grep -v 'CDS' | grep -v 'exon' | cat mRNA.GFF3 - > mRNA_w_organelles.GFF3
+grep '^mtMinus' genes.GFF3 | grep -v 'CDS' | grep -v 'exon' >> mRNA_w_organelles.GFF3
+```
+
+recreating the filtered GFF first:
+
+```python
+import csv
+from tqdm import tqdm
+
+with open('data/rate/gene_lists/expressed_genes.tsv', 'r', newline='') as f:
+    gene_list = [l[0] for l in csv.reader(f, delimiter='\t')]
+
+with open('data/rate/gene_lists/expressed_genes.gff3', 'w') as f_out:
+    writer = csv.writer(f_out, delimiter='\t')
+    with open('data/references/mRNA_w_organelles.GFF3', 'r', newline='') as f:
+        reader = csv.reader(f, delimiter='\t')
+        for line in tqdm(reader):
+            start, end = int(line[3]), int(line[4])
+            name_dict = {l.split('=')[0]: l.split('=')[1] for l in line[-1].split(';')} 
+            if any([gene_name in gene_list for gene_name in name_dict.values()]):
+                writer.writerow(line)
+```
+
+and finally, creating the lookup again:
+
+```bash
+time python analysis/rate/callable_genes_degeneracy.py \
+--callables_table data/rate/all_callable.tsv.gz \
+--gff data/rate/gene_lists/expressed_genes.gff3 \
+--annotation_table data/references/annotation_table.txt.gz \
+--outname data/rate/ka_ks/syn_nonsyn_expressed_callables.tsv
+```
+
+going to redo the combining somewhat blindly:
+
+```python
+import csv
+from tqdm import tqdm
+import numpy as np
+
+callables = {}
+
+with open('data/rate/ka_ks/syn_nonsyn_expressed_callables.tsv', 'r', newline='') as f:
+    reader = csv.DictReader(f, delimiter='\t')
+    last_gene = None
+    keys = ['fold0', 'fold2', 'fold3', 'fold4', 'nonsyn', 'syn']
+    for line in tqdm(reader):
+        current_gene = line['gene_name']
+        if current_gene != last_gene:
+            last_gene = current_gene
+            callables[current_gene] = np.array([float(line[k]) for k in keys])
+        elif current_gene == last_gene:
+            current_vals = np.array([float(line[k]) for k in keys])
+            callables[current_gene] = np.add(callables[current_gene], current_vals)
+
+with open('data/rate/ka_ks/all_expressed.tsv', 'w') as f_out:
+    with open('data/rate/ka_ks/syn_nonsyn_expressed_counts.tsv', 'r', newline='') as f:
+        reader = csv.DictReader(f, delimiter='\t')
+        fieldnames = ['gene_name', 'nonsyn_muts', 'syn_muts']
+        fieldnames.extend(keys)
+        writer = csv.DictWriter(f_out, delimiter='\t', fieldnames=fieldnames)
+        writer.writeheader()
+        for line in tqdm(reader):
+            try:
+                full_key = [k for k in callables.keys() if line['gene_name'] in k][0]
+            except:
+                tqdm.write(line['gene_name']) # should only print out <30 ADF genes
+                continue
+            values = callables[full_key]
+            out_dict = {keys[i]: values[i] for i, colname in enumerate(keys)}
+            for key, value in line.items():
+                out_dict[key] = value
+            writer.writerow(out_dict)
+```
+    
+broke cause apparently the callables table doesn't have mtMinus on it...
+
+given that no expressed gene with any actual mutations is actually on mtMinus,
+I'm going to get the code to outright skip mtMinus with a quick modification in 
+`callable_genes_degeneracy` 
+
+rerunning and looks like we're good! 
+
 
 
 

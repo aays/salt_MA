@@ -79,6 +79,8 @@ def count_gene_sites(callables_table, gff, annotation_table, outname):
 
             for gene in tqdm(reader):
                 chrom, start, end = gene['chrom'], int(gene['start']), int(gene['end'])
+                if chrom == 'mtMinus': # see log
+                    continue
 
                 d = {}
                 for sample in samples:
