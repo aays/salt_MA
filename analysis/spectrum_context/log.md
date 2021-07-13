@@ -217,6 +217,34 @@ mkdir -p triplets_indiv/ # in same folder
 mv -v *MA.tsv triplets_indiv/
 ```
 
+## 18/6/2021
+
+to do:
+
+- estimate and plot 6 mutation rates (AC, AG, AT, CA, CG, CT)
+    - MA
+    - saltMA
+    - adaptation lines
+- estimate and plot 32 triplet rates
+    - MA
+    - saltMA
+    - adaptation lines
+
+the triplet data are all good to go, so I need to review how best to present
+that - but in the meantime, the 6 mutation rates is doable as is
+
+need to see if I can find the data used to generate the original Fig 5 since that'd
+make life a lot easier, but if not that might need to be recalculated from the mut tables
+
+update: no dice - let's do this the long way
+
+need to calculate obs/exp, where 
+
+exp subs = base composition * prob(base changing to mut base) [33%] * num mutations
+
+going to do this in an Rmd file - `mut_base_spectrum.Rmd`
+
+
 
 
 

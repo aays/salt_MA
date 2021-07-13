@@ -2469,3 +2469,191 @@ mv -v mut_describer_fix_test.tsv data/mutations/mut_describer/muts_described.fin
 ```
 
 and I'll be moving forward with this! 
+
+## 21/6/2021
+
+hold on - need to finalize SL26 as well
+
+moving the earlier two files (`SL26_all_test` from UG and `HC_test` from HC)
+to `data/mutations/SL26`
+
+going to redo these at GQ20
+
+```bash
+time python analysis/filtering/filter_candidate_muts.py \
+--vcf data/alignments/genotyping/UG/combined/SL26_all_salt.vcf.gz \
+--gq 20 --out_format table --vcf_type combined \
+--verbose_level 1 --single_sample S26 \
+--out data/mutations/SL26/SL26_all_20.tsv
+
+time python analysis/filtering/filter_candidate_muts.py \
+--vcf data/alignments/genotyping/HC/combined/SL26_all_salt.vcf.gz \
+--gq 20 --out_format table --vcf_type combined \
+--verbose_level 1 --single_sample S26 \
+--out data/mutations/SL26/SL26_HC_20.tsv
+```
+
+making a SNPs file for SL26 based on the above:
+
+```python
+# in data/mutations/SL26
+import csv
+fname = 'SL26_all_20.tsv'
+outname = 'SL26_all_20_snps.tsv'
+from tqdm import tqdm
+with open(fname, 'r', newline='') as f_in:
+    reader = csv.DictReader(f_in, delimiter='\t')
+    fieldnames = reader.fieldnames
+    with open(outname, 'w', newline='') as f_out:
+        writer = csv.DictWriter(f_out, fieldnames=fieldnames, delimiter='\t')
+        writer.writeheader()
+        for record in tqdm(reader):
+            alt = eval(record['alt'])
+            max_alt_length = max([len(s) for s in alt])
+            if max_alt_length == 1 and len(record['ref']) == 1:
+                writer.writerow(record)
+# also redone with the HC file
+```
+
+next up - screenshotting the three (lol) SNMs that this turned up
+
+```bash
+export DISPLAY=:1
+./bin/Xvfb :1 -nolisten tcp -fp /home/hasans11/apps/lib/X11/fonts/misc/
+
+time python analysis/filtering/mutation_snapshots.py \
+--fname data/mutations/SL26/SL26_HC_20_snps.tsv \
+--igv bin/igv.sh \
+--reference data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+--bam data/alignments/bam/SL26_5.bam data/alignments/bam/SL27_0.bam \
+--flank_size 50 \
+--outdir data/mutations/screenshots/SL26/
+# added in SL27_0 just for comparison
+```
+
+this seems to be breaking for a few reasons... first needed
+to edit the java executable in `igv.sh` to `/usr/bin/java` to get
+it to work
+
+for posterity:
+
+```
+$ /usr/bin/java -version
+openjdk version "1.8.0_282"
+OpenJDK Runtime Environment (build 1.8.0_282-b08)
+OpenJDK 64-Bit Server VM (build 25.282-b08, mixed mode)
+```
+
+but I'm also getting this error now:
+
+```
+[xcb] Too much data requested from _XRead
+[xcb] This is most likely caused by a broken X extension library
+[xcb] Aborting, sorry about that.
+java: xcb_io.c:742: _XRead: Assertion `!xcb_xlib_too_much_data_requested' failed.
+Aborted (core dumped)
+```
+
+trying to reinstall xcb in an attempt to fix this -
+
+```
+cd ~/apps
+wget ftp://ftp.xfree86.org/pub/XFree86/current/binaries/Linux-x86_64-glibc23/Xfnts.tgz
+wget ftp://ftp.xfree86.org/pub/XFree86/current/binaries/Linux-x86_64-glibc23/Xvfb.tgz
+# there already existed the previous Xfnts and Xvfb, had to rename
+tar zxvf Xfnts.tgz # unzips into lib/X11, had to rename earlier dir
+tar zxvf Xvfb.tgz # unzips into bin/Xvfb, had to rename earlier executable
+
+mkdir ~/xcb
+# in folder
+wget http://mirror.centos.org/centos/7/os/x86_64/Packages/libxcb-devel-1.13-1.el7.x86_64.rpm
+```
+
+so this is not functioning as intended - which is a huge shame cause it worked so well
+earlier on - will ask Brian to do a 'proper' xcb install and hopefully that does
+the trick somewhat 
+
+in the meantime, I also found the handful of shared mutations in
+`salt_lines/mutations/snps/unified_genotyper/more_filters/haplotype_based/hmmIBD` -
+might go back to this later
+
+perhaps I could just export the handful of reads around those regions using `export_IGV.py`
+and then look at these three mutations offline? will do tomorrow - it's dinner time
+
+## 22/6/2021
+
+alright, time to export these regions for offline viewing:
+
+```bash
+time python analysis/filtering/export_IGV.py \
+--fname data/mutations/SL26/SL26_all_20.tsv \
+--bam_dir data/alignments/bam \
+--region 4000 \
+--outdir data/mutations/realignment/filtered_igv
+```
+
+modified the script to hardcode `SL26_5` and `SL27_0` since 26 doesn't have a 0 sample
+
+wait - I needed to do this for the HC
+
+```bash
+time python analysis/filtering/export_IGV.py \
+--fname data/mutations/SL26_HC_20.tsv \
+--bam_dir data/alignments/bam \
+--region 4000 \
+--outdir data/mutations/realignment/filtered_igv
+```
+
+## 23/6/2021
+
+went through these yesterday, and the only ones passed were
+
+```
+chromosome_6 1465078 # indel
+chromosome_7 348105 # indel
+chromosome_16 1457184 # SNM
+```
+
+now saved in `data/mutations/SL26/SL26_HC_final.tsv`
+
+mut describer, though I anticipate this might break/need edits:
+
+```bash
+time python analysis/filtering/mut_describer.py \
+--fname data/mutations/SL26/SL26_HC_final.tsv \
+--vcf_path data/alignments/genotyping/HC/combined \
+--ref_fasta data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+--ant_file data/references/annotation_table.txt.gz \
+--outname data/mutations/mut_describer/SL26_described.tsv
+```
+
+so this broke because I forgot about the QUAL thing - this might
+be a good opportunity to fix the original file either way
+
+setting all samples besides `SL26_5` to `.`, adding QUAL and MQ values
+manually after querying them with cyvcf2, and changing the sample
+name back to `SL26_samples` from `SL26_all_salt` (these are the depths I have
+stooped to!) 
+
+needed to also update mut describer somewhat - there was no clean
+way to ensure that the 5 sample was selected each time, so I just had
+it report `replace` and then corrected it in vim... shudder
+
+adding these three to the bottom of 
+`data/mutations/mut_describer/muts_described.final.tsv`:
+
+```bash
+# in data/mutations/mut_describer
+tail -n +2 SL26_described.tsv >> muts_described.final.tsv
+```
+
+wait - I hadn't put indels in this file - will remove those two lines
+and we're finally done! 
+
+continuing this in the `rate` log
+
+
+
+
+
+

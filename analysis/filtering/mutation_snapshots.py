@@ -156,7 +156,7 @@ def generate_snapshots(fname, igv, reference, bam_files, flank_size, outdir,
         print('[saltMA] either that or no DISPLAY variable is set. '
               'double check to see output has been generated')
     print('[saltMA] screenshotting complete - deleting temp batch script...')
-    os.remove(fname_batch)
+    # os.remove(fname_batch)
     print('[saltMA] results written to {}. exiting...'.format(outdir))
 
 

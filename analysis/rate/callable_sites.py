@@ -126,7 +126,7 @@ def parse_calls(gvcf_dir, out):
     vcfs = glob.glob(f'{gvcf_dir}*.g.vcf.gz')
     lengths = get_chr_lengths(VCF(vcfs[0]))
     samples = sorted([os.path.basename(f).rstrip('.g.vcf.gz') for f in vcfs])
-    fieldnames = ['chrom', 'pos']
+    fieldnames = ['#chrom', 'pos']
     fieldnames.extend(samples)
 
     with open(out, 'w') as f:
@@ -135,18 +135,18 @@ def parse_calls(gvcf_dir, out):
         for chrom in lengths: # use dict keys here
             print(f'[saltMA] processing {chrom}')
             total = lengths[chrom]
-            for window_start in tqdm(range(0, total, int(1e5))):
+            for window_start in tqdm(range(0, total, int(1e5)), desc=chrom):
                 lookup = {}
                 if window_start + 1e5 > total:
                     window_end = total
                 else:
-                    window_end = window_start + int(1e5) - 1
+                    window_end = window_start + int(1e5)
                 lookup = get_lookup(samples, gvcf_dir, chrom, window_start, window_end)
                 # print(window_start, window_end)
                 # print([[k, len(v)] for k, v in lookup.items()])
                 for i in range(window_end - window_start):
                     call_dict = {k: v[i] for k, v in lookup.items()}
-                    call_dict['chrom'] = chrom
+                    call_dict['#chrom'] = chrom
                     call_dict['pos'] = window_start + i + 1
                     writer.writerow(call_dict)
 

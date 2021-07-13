@@ -43,7 +43,7 @@ def parse_record(line_dict, region_size):
     region : str
         samtools-formatted region 
     """
-    sample = line_dict['fname'].replace('_samples', '')
+    sample = line_dict['fname'].replace('_samples', '').replace('_all_salt', '')
     chrom, pos = line_dict['chrom'], int(line_dict['pos'])
     flank_size = int(region_size / 2)
     start, end = pos - flank_size, pos + flank_size 
@@ -77,12 +77,14 @@ def export_bams(fname, bam_dir, region_size, outdir):
         for line in tqdm(reader):
             sample, region = parse_record(line, region_size)
             print(f'[saltMA] processing {sample} at {region}')
-            if not sample in ['DL41_46', 'DL46_41']:
-                bams = [f'{sample}_0.bam', f'{sample}_5.bam']
-            else:
+            if sample in ['DL41_46', 'DL46_41']:
                 first, second = sample.split('_')
                 last = 'DL' + second
                 bams = [f'{first}_0.bam', f'DL{second}_5.bam']
+            elif 'SL26' in sample:
+                bams = ['SL26_5.bam', 'SL27_0.bam'] # hardcoding... 
+            else:
+                bams = [f'{sample}_0.bam', f'{sample}_5.bam']
             pos = int(line['pos'])
             outfile = '{sample}_{chrom}_{pos}_{val}.sam'
             for bam in bams:
