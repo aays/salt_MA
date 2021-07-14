@@ -86,11 +86,16 @@ def parse_muts_gene_list(mut_table, gene_file, out):
     gene_list = parse_gene_file(gene_file)
 
     gene_dict = {}
+    sample_dict = {}
 
     # parse mut describer file
     with open(mut_table, 'r') as f:
         reader = csv.DictReader(f, delimiter='\t')
         for record in tqdm(reader):
+            sample = record['mutant_sample']
+            if sample not in sample_dict:
+                sample_dict[sample] = {} # sample-specific gene dict
+            mutant_sample = sample[-1] # get 0 or 5
             syn_nonsyn = record['nonsyn_v_syn']
             feature_names = eval(record['feature_names'])
             
@@ -108,23 +113,29 @@ def parse_muts_gene_list(mut_table, gene_file, out):
             # iterate through feature names and increment counts
             for gene_name in feature_names:
                 if gene_name in gene_list:
-                    if gene_name not in gene_dict:
-                        gene_dict[gene_name] = {'nonsynonymous': 0, 'synonymous': 0}
-                    gene_dict[gene_name][syn_nonsyn] += 1
+                    if gene_name not in sample_dict[sample].keys():
+                        sample_dict[sample][gene_name] = {'nonsynonymous_0': 0,
+                        'synonymous_0': 0, 'nonsynonymous_5': 0,
+                        'synonymous_5': 0}
+                    sample_dict[sample][gene_name][f'{syn_nonsyn}_{mutant_sample}'] += 1
     
     # write to file
     with open(out, 'w', newline='') as f:
         print(f'[saltMA] writing to {out}...')
-        fieldnames = ['gene_name', 'nonsyn_muts', 'syn_muts']
+        fieldnames = ['sample', 'gene_name', 'nonsyn_muts_0', 'syn_muts_0', 'nonsyn_muts_5', 'syn_muts_5']
         writer = csv.DictWriter(f, delimiter='\t', fieldnames=fieldnames)
         writer.writeheader()
 
-        for gene_name, count_dict in tqdm(gene_dict.items(), desc='genes w/ muts'):
+        for sample, gene_dict in tqdm(sample_dict.items(), desc='genes w/ muts'):
             d = {}
-            d['gene_name'] = gene_name
-            d['nonsyn_muts'] = count_dict['nonsynonymous']
-            d['syn_muts'] = count_dict['synonymous']
-            writer.writerow(d)
+            for gene_name, count_dict in gene_dict.items():
+                d['sample'] = sample
+                d['gene_name'] = gene_name
+                d['nonsyn_muts_0'] = count_dict['nonsynonymous_0']
+                d['nonsyn_muts_5'] = count_dict['nonsynonymous_5']
+                d['syn_muts_0'] = count_dict['synonymous_0']
+                d['syn_muts_5'] = count_dict['synonymous_5']
+                writer.writerow(d)
         
         # handling genes that have no muts
         gene_list_set = set(gene_list)
@@ -134,9 +145,12 @@ def parse_muts_gene_list(mut_table, gene_file, out):
         missing_genes = gene_list_set.difference(found_genes_set)
         for gene_name in tqdm(missing_genes, desc='genes w/o muts'):
             d = {}
+            d['sample'] = 'NA'
             d['gene_name'] = gene_name
-            d['nonsyn_muts'] = 0
-            d['syn_muts'] = 0
+            d['nonsyn_muts_0'] = 0
+            d['nonsyn_muts_5'] = 0
+            d['syn_muts_0'] = 0
+            d['syn_muts_5'] = 0
             writer.writerow(d)
 
 

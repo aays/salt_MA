@@ -818,6 +818,183 @@ I'm going to get the code to outright skip mtMinus with a quick modification in
 
 rerunning and looks like we're good! 
 
+## 13/7/2021
+
+on second thought - I should differentiate between muts in 0 and 5 samples for
+the Perrineau and expressed gene sets - which means a lot of the above might need to be rerun...
+
+modified the script somewhat - here goes:
+
+```bash
+time python analysis/rate/syn_mut_count.py \
+--mut_table data/mutations/mut_describer/muts_described.final.tsv \
+--gene_file data/rate/gene_lists/perrineau_genes_only.txt \
+--out data/rate/ka_ks/syn_nonsyn_perrineau_counts.tsv
+
+time python analysis/rate/syn_mut_count.py \
+--mut_table data/mutations/mut_describer/muts_described.final.tsv \
+--gene_file data/rate/gene_lists/expressed_genes.tsv \
+--out data/rate/ka_ks/syn_nonsyn_expressed_counts.tsv
+```
+
+remaking the combined files given these new cols:
+
+```python
+import csv
+from tqdm import tqdm
+import numpy as np
+
+callables = {}
+
+with open('data/rate/ka_ks/syn_nonsyn_expressed_callables.tsv', 'r', newline='') as f:
+    reader = csv.DictReader(f, delimiter='\t')
+    last_gene = None
+    keys = ['fold0', 'fold2', 'fold3', 'fold4', 'nonsyn', 'syn']
+    for line in tqdm(reader):
+        current_gene = line['gene_name']
+        if current_gene != last_gene:
+            last_gene = current_gene
+            callables[current_gene] = np.array([float(line[k]) for k in keys])
+        elif current_gene == last_gene:
+            current_vals = np.array([float(line[k]) for k in keys])
+            callables[current_gene] = np.add(callables[current_gene], current_vals)
+
+with open('data/rate/ka_ks/all_expressed.tsv', 'w') as f_out:
+    with open('data/rate/ka_ks/syn_nonsyn_expressed_counts.tsv', 'r', newline='') as f:
+        reader = csv.DictReader(f, delimiter='\t')
+        fieldnames = ['gene_name', 'nonsyn_muts_0', 'syn_muts_0', 'nonsyn_muts_5', 'syn_muts_5']
+        fieldnames.extend(keys)
+        writer = csv.DictWriter(f_out, delimiter='\t', fieldnames=fieldnames)
+        writer.writeheader()
+        for line in tqdm(reader):
+            try:
+                full_key = [k for k in callables.keys() if line['gene_name'] in k][0]
+            except:
+                tqdm.write(line['gene_name']) # should only print out <30 ADF genes
+                continue
+            values = callables[full_key]
+            out_dict = {keys[i]: values[i] for i, colname in enumerate(keys)}
+            for key, value in line.items():
+                out_dict[key] = value
+            writer.writerow(out_dict)
+```
+
+and then repeated with the Perrineau genes - after which back I go to `ka_ks.Rmd`
+
+update: two more to do items
+
+- the genomewide callables need to include _all_ chromosomes, not just the ones with muts
+- the gene set mutation counts and callables need to be sample type separated in the combined files
+
+the first to do item can be fixed just by using `degen_callables_lookup.tsv`, but the second
+might require a bit of Python still
+
+perhaps something like
+
+```python
+import csv
+from tqdm import tqdm
+import numpy as np
+
+callables = {}
+
+with open('data/rate/ka_ks/syn_nonsyn_expressed_callables.tsv', 'r', newline='') as f:
+    reader = csv.DictReader(f, delimiter='\t')
+    last_gene = None
+    keys = ['fold0', 'fold2', 'fold3', 'fold4', 'nonsyn', 'syn']
+    for line in tqdm(reader):
+        current_gene = line['gene_name']
+        sample_type = line['sample'][-1]
+        key = f'{current_gene}_{sample_type}'
+        if current_gene != last_gene:
+            last_gene = current_gene
+            callables[key] = np.array([float(line[k]) for k in keys])
+        elif current_gene == last_gene:
+            current_vals = np.array([float(line[k]) for k in keys])
+            if key not in callables:
+                callables[key] = np.array([float(line[k]) for k in keys])
+            else:
+                callables[key] = np.add(callables[key], current_vals)
+
+with open('data/rate/ka_ks/all_expressed.tsv', 'w') as f_out:
+    with open('data/rate/ka_ks/syn_nonsyn_expressed_counts.tsv', 'r', newline='') as f:
+        reader = csv.DictReader(f, delimiter='\t')
+        fieldnames = ['gene_name', 'nonsyn_muts_0', 'syn_muts_0', 'nonsyn_muts_5', 'syn_muts_5']
+        fieldnames.extend([k + '_0' for k in keys])
+        fieldnames.extend([k + '_5' for k in keys])
+        writer = csv.DictWriter(f_out, delimiter='\t', fieldnames=fieldnames)
+        writer.writeheader()
+        for line in tqdm(reader):
+            if line['gene_name'].startswith('ADF'):
+                continue
+            key_list = [k for k in callables.keys() if line['gene_name'] in k]
+            key_0 = [k for k in key_list if k.endswith('0')][0]
+            key_5 = [k for k in key_list if k.endswith('5')][0]
+            values_0 = callables[key_0]
+            values_5 = callables[key_5]
+            out_dict = {keys[i] + '_0': values_0[i] for i, colname in enumerate(keys)}
+            out_dict.update({keys[i] + '_5': values_5[i] for i, colname in enumerate(keys)})
+            for key, value in line.items():
+                out_dict[key] = value
+            writer.writerow(out_dict)
+
+```
+
+that actually worked! repeating for the Perrineau and then back to the Rmd once more
+
+## 14/7/2021
+
+time is a flat circle! 
+
+I need the mutant samples for the gene set counts, after which I need to remake the `all` files
+once more
+
+this is to differentiate between the three sample groups (CC/DL/SL) if needed
+
+changed the dict structure in `syn_mut_count` a bit so that there's a dict of samples
+that nests the gene dicts:
+
+```bash
+time python analysis/rate/syn_mut_count.py \
+--mut_table data/mutations/mut_describer/muts_described.final.tsv \
+--gene_file data/rate/gene_lists/expressed_genes.tsv \
+--out data/rate/ka_ks/syn_nonsyn_expressed_counts.tsv
+```
+
+worked like a charm - huh! again for the perrineau and then I'll have to combine the files again
+
+```bash
+time python analysis/rate/syn_mut_count.py \
+--mut_table data/mutations/mut_describer/muts_described.final.tsv \
+--gene_file data/rate/gene_lists/perrineau_genes_only.txt \
+--out data/rate/ka_ks/syn_nonsyn_perrineau_counts.tsv
+```
+
+instead of combining the files, I'm going to make callable lookups
+that only contain the genes with actual muts
+
+could feasibly do this with bash -
+
+```bash
+while read -r line; do
+    grep ${line} data/rate/ka_ks/syn_nonsyn_expressed_callables.tsv >> c.tsv
+done < <(grep -P '\t1' data/rate/ka_ks/syn_nonsyn_expressed_counts.tsv | cut -f 2)
+
+# added header w/ cat afterwards
+mv -v c.tsv data/rate/ka_ks/expressed_genes_callables.tsv
+```
+
+oh man, I can't believe that worked! doing it again for the Perrineau gene
+set just for completeness
+
+```bash
+while read -r line; do
+    grep ${line} data/rate/ka_ks/syn_nonsyn_perrineau_callables.tsv >> c.tsv
+done < <(grep -P '\t1' data/rate/ka_ks/syn_nonsyn_perrineau_counts.tsv | cut -f 2)
+
+mv -v c.tsv data/rate/ka_ks/perrineau_genes_callables.tsv
+```
+
 
 
 
