@@ -86,8 +86,10 @@ Making a table:
 min_score_distribution %>% 
   mutate(GQ_bin = case_when(
     min_GQ < 10 ~ '0-9',
-    min_GQ >= 10  & min_GQ < 20 ~ '10-19',
-    min_GQ >= 20 & min_GQ < 30 ~ '20-29',
+    min_GQ >= 10  & min_GQ <= 14 ~ '10-19',
+    min_GQ >= 15  & min_GQ < 20 ~ '10-19',
+    min_GQ >= 20 & min_GQ <= 24 ~ '20-24',
+    min_GQ >= 25 & min_GQ <= 29 ~ '25-29',
     min_GQ >= 30 ~ '30-100'
   )) %>% 
   group_by(GQ_bin) %>% 
@@ -120,11 +122,46 @@ snps %>%
     x = 'min GQ',
     y = 'proportion'
   ) +
-  coord_cartesian(y = c(0, 0.1))
+  coord_cartesian(x = c(-40, -10), y = c(0, 0.01))
 ```
 
+## By sample
 
+```{r}
+by_sample <- snps %>% 
+  mutate(min_GQ = case_when(
+    gt1_qual < gt2_qual ~ gt1_qual,
+    gt1_qual > gt2_qual ~ gt2_qual,
+    gt1_qual == gt2_qual ~ gt1_qual
+  )) %>% 
+  group_by(fname, min_GQ) %>% 
+  summarise(n = n(), mean_gt1_depth = mean(gt1_depth),
+            mean_gt2_depth = mean(gt2_depth)) %>% 
+  mutate(GQ_bin = case_when(
+    min_GQ < 10 ~ '0-9',
+    min_GQ >= 10  & min_GQ < 20 ~ '10-19',
+    min_GQ >= 20 & min_GQ <= 24 ~ '20-24',
+    min_GQ >= 25 & min_GQ <= 29 ~ '25-29',
+    min_GQ >= 30 ~ '30-100'
+  )) %>% 
+  group_by(fname, GQ_bin) %>% 
+  summarise(
+    sites = sum(n))
 
+by_sample
+```
+
+Visualizing:
+
+```{r}
+by_sample %>% 
+  ggplot(aes(x = GQ_bin, y = sites)) +
+  geom_bar(stat = 'identity') +
+  facet_wrap(~ fname) + 
+  coord_cartesian(y = c(0, 200)) +
+  theme_classic() +
+  theme(axis.text.x = element_text(size = 10, angle = 45, hjust = 1))
+```
 
 
 
