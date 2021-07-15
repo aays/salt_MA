@@ -1,0 +1,204 @@
+---
+title: "KaKs"
+author: Ahmed Hasan
+output: pdf_notebook
+---
+
+# Package import
+
+```{r}
+library(tidyverse)
+library(fs)
+library(here)
+```
+
+# Data import
+
+```{r}
+all_genome = read_tsv(here('data/rate/ka_ks/all_genome.tsv'), col_types = cols()) %>% 
+  mutate(sample_type = case_when(
+    str_ends(sample, '0') ~ 0,
+    str_ends(sample, '5') ~ 5
+  ))
+all_genome_callables = read_tsv(here('data/rate/ka_ks/degen_callables_lookup.tsv'), col_types = cols()) %>% 
+  mutate(sample_type = case_when(
+    str_ends(sample, '0') ~ 0,
+    str_ends(sample, '5') ~ 5
+  ))
+
+all_perrineau = read_tsv(
+  here('data/rate/ka_ks/syn_nonsyn_perrineau_counts.tsv'), col_types = cols()) %>% 
+  mutate(total_muts = rowSums(
+    across(contains('muts')))
+  ) %>% 
+  filter(total_muts > 0) %>%
+  select(-total_muts) 
+  
+all_perrineau_callables = read_tsv(
+  here('data/rate/ka_ks/perrineau_genes_callables.tsv'), col_types = cols())
+
+all_expressed = read_tsv(
+  here('data/rate/ka_ks/syn_nonsyn_expressed_counts.tsv'), col_types = cols()) %>% 
+  mutate(total_muts = rowSums(
+    across(contains('muts')))
+  ) %>% 
+  filter(total_muts > 0) %>%  # 41 mutated genes
+  select(-total_muts) 
+  
+all_expressed_callables = read_tsv(
+  here('data/rate/ka_ks/expressed_genes_callables.tsv'), col_types = cols())
+```
+
+# Ka/Ks calc
+
+## Genomewide
+
+Need to calculate:
+
+$$
+
+\frac{K_a}{K_s} = \frac{\text{nonsyn muts} / \text{nonsyn callables}}{\text{syn muts} / \text{syn callables}}
+
+$$
+
+```{r}
+# get callables per sample type
+genome_sample_callables = all_genome_callables %>% 
+  # filter(str_detect(scaffold, 'scaffold', negate = TRUE)) %>% 
+  group_by(sample_type) %>% 
+  summarise(across(contains('syn'), sum))
+
+# get muts per sample type
+genome_sample_counts = all_genome %>% 
+  select(-nonsyn, -syn) %>% # these values only consider chrs with muts
+  group_by(sample_type) %>% 
+  summarise(across(.cols = contains('syn'), .fns = sum))
+```
+
+and now to calculate Ka/Ks:
+
+```{r}
+genome_sample_counts %>% 
+  
+# join callables and counts
+  left_join(
+    genome_sample_callables, by = 'sample_type'
+  ) %>% 
+
+# compute Ka, Ks, and Ka/Ks values for 0 and 5
+  mutate(
+    ka = nonsyn_muts / nonsyn,
+    ks = syn_muts / syn
+  ) %>% 
+  mutate(
+    ka_ks = ka / ks
+  )
+```
+
+## Expressed genes
+
+How many genes had mutations in multiple samples? 
+
+```{r}
+all_expressed %>% 
+  group_by(gene_name) %>% 
+  count() %>% 
+  arrange(-n) # just NP_042564.1
+```
+
+Creating a gene name column:
+
+```{r}
+all_genes = unique(all_expressed$gene_name)
+all_gene_names = all_expressed_callables$gene_name
+g_temp = character(length(all_gene_names))
+
+get_gene = function(string, pattern) {
+  gene_vec = str_extract(string, pattern)
+  gene_name = gene_vec[!is.na(gene_vec)]
+  return(gene_name)
+}
+
+# pain
+# no idea why mutate() refused to work for this operation
+for (i in seq_along(g_temp)) {
+  gene = get_gene(all_gene_names[i], all_genes)
+  g_temp[i] = gene
+}
+
+all_expressed_callables$actual_gene_name = g_temp
+```
+
+Joining the callables dataset with the mutation counts and computing Ka/Ks:
+
+```{r}
+all_expressed %>% 
+  
+  # transform to long format and separate by sample type
+  pivot_longer(cols = contains('muts'), names_to = 'measure') %>% 
+  mutate(
+    sample_type = str_extract(sample, '([05])$'), 
+    measure_type = str_extract(measure, '([0-5])$')) %>% 
+  mutate( 
+    measure = str_replace(measure, '_[05]', '')
+  ) %>% 
+  filter(sample_type == measure_type) %>% 
+  select(-measure_type) %>% 
+
+  # transform back to wide format
+  pivot_wider(names_from = measure, values_from = value) %>% 
+  
+  # combine with similarly sample-type-separated callables file
+  full_join(
+    all_expressed_callables %>% 
+      rename(all_names = gene_name) %>% 
+      rename(gene_name = actual_gene_name) %>% 
+      select(-all_names),
+    by = c('sample', 'gene_name')
+  ) %>% 
+  
+  # some data cleanup post full join
+  distinct() %>% # full join induced some duplicates
+  arrange(sample) %>% 
+  mutate(sample_type = str_extract(sample, '([05])$')) %>%  # for newly added rows 
+  mutate(nonsyn_muts = ifelse(is.na(nonsyn_muts), 0, nonsyn_muts),
+         syn_muts = ifelse(is.na(syn_muts), 0, syn_muts)) %>% 
+  
+  # group by sample group and sample type and get sums for mut counts and callable counts
+  mutate(sample_group = str_extract(sample, '^[A-Z]{2}')) %>% 
+  select(sample, sample_group, sample_type, gene_name, 
+         chrom, start, end, everything(), -contains('fold')) %>% 
+  group_by(sample_group, sample_type) %>% 
+  summarise(across(contains('syn'), sum)) %>% 
+  
+  # compute Ka, Ks, and Ka/Ks values for 0 and 5 samples across sample groups
+  mutate(
+    ka = nonsyn_muts / nonsyn,
+    ks = syn_muts / syn
+  ) %>% 
+  mutate(
+    ka_ks = ka / ks
+  )
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
