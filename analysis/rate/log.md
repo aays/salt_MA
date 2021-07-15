@@ -995,6 +995,17 @@ done < <(grep -P '\t1' data/rate/ka_ks/syn_nonsyn_perrineau_counts.tsv | cut -f 
 mv -v c.tsv data/rate/ka_ks/perrineau_genes_callables.tsv
 ```
 
+apparently one gene (26907184) was somehow missed by the above since it had 2
+muts, meaning `\t1` didn't match it! I am a fool - can't believe I didn't even
+consider that some genes might have more than 1 mutation in the same category -
+rookie mistake
+
+adding it directly - I'm fortunate only one gene fits the bill here
+
+```bash
+# in data/rate/ka_ks
+grep '26907184' syn_nonsyn_expressed_callables.tsv >> expressed_genes_callables.tsv
+```
 
 
 
