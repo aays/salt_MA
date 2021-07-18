@@ -244,6 +244,57 @@ exp subs = base composition * prob(base changing to mut base) [33%] * num mutati
 
 going to do this in an Rmd file - `mut_base_spectrum.Rmd`
 
+## 18/7/2021
+
+coming back to this a month later - just need to update the triplet
+files to include 0 and 5 in the same names
+
+rerunning - starting with SL so I can check whether it worked quickly
+
+```bash
+# SL
+for sample in 27 29; do
+    time python analysis/spectrum_context/get_triplets.py \
+    --fname data/mutations/mut_describer/muts_described.final.tsv \
+    --vcf data/alignments/genotyping/UG/pairs/SL${sample}_samples.vcf.gz \
+    --out data/spectrum_context/triplets/triplets_indiv/SL${sample}_saltMA.tsv;
+done
+
+# also adding SL26 since I have that now
+time python analysis/spectrum_context/get_triplets.py \
+--fname data/mutations/mut_describer/muts_described.final.tsv \
+--vcf data/alignments/genotyping/UG/pairs/SL26_samples.vcf.gz \
+--out data/spectrum_context/triplets/triplets_indiv/SL26_saltMA.tsv;
+
+# looks good! now for CC and DL
+# CC
+for sample in 1373 1952 2342 2344 2931 2935 2937; do
+    time python analysis/spectrum_context/get_triplets.py \
+    --fname data/mutations/mut_describer/muts_described.final.tsv \
+    --vcf data/alignments/genotyping/UG/pairs/CC${sample}_samples.vcf.gz \
+    --out data/spectrum_context/triplets/triplets_indiv/CC${sample}_saltMA.tsv;
+done
+
+# DL
+for sample in 40 51 53 55 57 58; do
+    time python analysis/spectrum_context/get_triplets.py \
+    --fname data/mutations/mut_describer/muts_described.final.tsv \
+    --vcf data/alignments/genotyping/UG/pairs/DL${sample}_samples.vcf.gz \
+    --out data/spectrum_context/triplets/triplets_indiv/DL${sample}_saltMA.tsv;
+done
+```
+
+combining the files:
+
+```R
+# in data/spectrum_context/triplets/
+library(tidyverse)
+library(fs)
+
+salt_fnames = dir_ls('triplets_indiv/', regexp = '\\w+saltMA\\.tsv')
+d_salt = map_dfr(salt_fnames, read_tsv, col_types = cols())
+write_tsv(d_salt, 'salt_all.tsv')
+```
 
 
 

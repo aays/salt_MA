@@ -50,8 +50,6 @@ def get_samples(vcf, most_recent=False) -> list:
     samples : list
         list of samples in VCF to be used
     """
-    # TODO: the logic for strain selection will have to be different for salt MA lines 
-    # since they're labelled _0 and _5 and that info needs to be preserved
     vcf_reader = VCF(vcf)
     if not most_recent:
         samples = [s.split('_')[0] for s in vcf_reader.samples]
@@ -85,10 +83,7 @@ def parse_line(line_dict, vcf) -> dict:
     out_dict = {}
     chrom, pos = line_dict['chromosome'], line_dict['position']
     mutant_sample = line_dict['mutant_sample']
-    if '_' in mutant_sample:
-        out_dict['sample'] = line_dict['mutant_sample'].split('_')[0]
-    else:
-        out_dict['sample'] = line_dict['mutant_sample']
+    out_dict['sample'] = line_dict['mutant_sample']
     out_dict['chromosome'] = chrom
     out_dict['position'] = pos
     out_dict['mutation'] = line_dict['mutation']
