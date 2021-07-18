@@ -1,0 +1,151 @@
+---
+title: "Intermutation distances"
+author: Ahmed Hasan
+output: pdf_notebook
+---
+
+# Import packages
+
+```{r}
+library(tidyverse)
+library(fs)
+library(here)
+```
+
+# Load in and clean data
+
+```{r}
+muts_raw = read_tsv(
+  here('data/mutations/mut_describer/muts_described.final.tsv'),
+  col_types = cols()
+)
+
+muts_clean = muts_raw %>% 
+  
+  # remove extra columns
+  select(chromosome, position, mutant_sample) %>% 
+  
+  # add sample and line groups as new cols
+  mutate(
+    sample_group = str_extract(mutant_sample, '^[A-Z]{2}'),
+    line = str_extract(mutant_sample, '[05]$')
+  ) %>% 
+  
+  # sort
+  mutate(chrom_val = as.numeric(str_extract(chromosome, '[0-9]{1,2}$'))) %>% 
+  arrange(line, chrom_val, sample_group, position)
+```
+
+# Distances
+
+Currently just working off chromosomes - ignoring scaffolds and organelles
+
+## Ungrouped
+
+Intermutation distances across entire mut dataset - no grouping
+
+```{r}
+muts_clean %>% 
+  arrange(chrom_val, position) %>% 
+  group_by(chromosome) %>% 
+  
+  # get intermut distances
+  mutate(next_pos = lead(position)) %>% 
+  mutate(d = next_pos - position) %>% 
+  
+  # remove 'outer boundary' muts
+  filter(!is.na(d))
+```
+
+## Grouped by line
+
+Intermutation distances in 0 lines and 5 lines, across all sample groups
+
+```{r}
+muts_line = muts_clean %>% 
+  arrange(line, chrom_val, position) %>% 
+  group_by(line, chromosome) %>% 
+  
+  # get intermut distances
+  mutate(next_pos = lead(position)) %>% 
+  mutate(d = next_pos - position) %>% 
+  
+  # remove 'outer boundary' muts
+  filter(!is.na(d))
+
+muts_line
+```
+
+## Grouped by line and sample group
+
+```{r}
+muts_line_group = muts_clean %>% 
+  arrange(line, sample_group, chrom_val, position) %>% 
+  group_by(line, sample_group, chromosome) %>% 
+  
+  # get intermut distances
+  mutate(next_pos = lead(position)) %>% 
+  mutate(d = next_pos - position) %>% 
+  
+  # remove 'outer boundary' muts
+  filter(!is.na(d)) %>% 
+  ungroup()
+
+muts_line_group
+```
+
+# Kolmogorov-Smirnov tests
+
+## Plots
+
+Across groups and lines:
+
+```{r}
+muts_line_group %>% 
+  filter(sample_group != 'SL') %>%
+  ggplot(aes(x = log10(d))) +
+  stat_ecdf(aes(color = sample_group, linetype = line))
+```
+
+## KS tests
+
+Between 0 and 5 of the same group:
+
+```{r}
+ks.test(
+  muts_line_group %>% filter(sample_group == 'CC', line == 0) %>% select(d) %>% unlist(),
+  muts_line_group %>% filter(sample_group == 'CC', line == 5) %>% select(d) %>% unlist()
+)
+
+ks.test(
+  muts_line_group %>% filter(sample_group == 'DL', line == 0) %>% select(d) %>% unlist(),
+  muts_line_group %>% filter(sample_group == 'DL', line == 5) %>% select(d) %>% unlist()
+)
+```
+
+Between sample groups:
+
+```{r}
+ks.test(
+  muts_line_group %>% filter(sample_group == 'CC', line == 0) %>% select(d) %>% unlist(),
+  muts_line_group %>% filter(sample_group == 'DL', line == 0) %>% select(d) %>% unlist()
+)
+
+ks.test(
+  muts_line_group %>% filter(sample_group == 'CC', line == 5) %>% select(d) %>% unlist(),
+  muts_line_group %>% filter(sample_group == 'DL', line == 5) %>% select(d) %>% unlist()
+)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
