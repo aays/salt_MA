@@ -113,6 +113,7 @@ muts_line_group %>%
   stat_ecdf(aes(color = sample_group, linetype = line)) +
   theme_classic() +
   scale_colour_viridis_d(begin = 0.4, end = 0.6)
+  stat_ecdf(aes(color = sample_group, linetype = line))
 ```
 
 ## KS tests

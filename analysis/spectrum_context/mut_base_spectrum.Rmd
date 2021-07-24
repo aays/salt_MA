@@ -1,0 +1,329 @@
+---
+title: "Mutation base spectrum"
+author: Ahmed Hasan
+output: html_notebook
+---
+
+# Package import
+
+```{r}
+library(tidyverse)
+library(fs)
+library(here)
+library(wesanderson)
+```
+
+# Data import
+
+```{r}
+# all mut describer outputs
+salt <- read_tsv(
+  here('data/mutations/mut_describer/muts_described.final.tsv'), col_types = cols()) %>% 
+  mutate(sample_type = str_extract(mutant_sample, '[05]$'),
+         sample_group = str_extract(mutant_sample, '^[A-Z]{2}'))
+
+ma <- read_tsv(
+  here('data/spectrum_context/MA/final.curated_muts.coord_sorted.txt'), 
+  col_types = cols(), na = c('.')
+) %>% 
+  select(-chromosome_1, -position_1) %>% 
+  filter(nchar(mutation) == 3) # remove indels
+
+adaptation <- read_csv(
+  here('data/prev/all_mutations_w_shared_hmmIBD_corrected_FPKM.csv'), 
+  col_types = cols(), na = c('.')
+) %>% 
+  filter(type == 'SNP')
+
+```
+
+# Mutational base spectrum
+
+6 possible SNMs
+- A -> C (also T -> G)
+- A -> G (also T -> C)
+- A -> T (also T -> A)
+- C -> A (also G -> T)
+- C -> G (also G -> C)
+- C -> T (also G -> A)
+
+## Generating observed count tables
+
+Need to get splice sites for silent/nonsilent classification of intronic sites - 
+ran this on hpcnode1 using a gffutils db:
+
+```{python, eval=FALSE}
+import csv
+import gffutils
+from tqdm import tqdm
+
+with open('muts.csv', 'r') as f: # equivalent of adaptation data frame above
+    reader = csv.DictReader(f)
+    reclist = [rec for rec in reader if rec['intronic'] == '1']
+  
+db = gffutils.create_db('final.strict.GFF3', dbfn='final.strict.db',
+    force=True, keep_order=True, merge_strategy='merge', sort_attribute_values=True)
+db = gffutils.FeatureDB('final.strict.db', keep_order=True)
+
+splice_list = []
+for record in tqdm(reclist):
+    gene_name = record['Gene.primaryIdentifier']
+    db_gene = db[gene_name]
+    pos = int(record['position'])
+    for exon in db.children(db_gene, featuretype='exon', order_by='start'):
+        if min(abs(pos - exon.start), abs(pos - exon.end)) < 3:
+        print(gene_name, record['chromosome'], record['position'])
+        print(exon)
+        splice_list.append(record)
+```
+
+Got me four intronic mutations that shouldn't be classed as silent:
+
+```
+Cre12.g545550 chromosome_12 8771346
+chromosome_12	phytozome8_0	exon	8770962	8771344	.	+	.	ID=PAC:26907314.exon.5;pacid=26907314;Parent=PAC:26907314;ness_ID=26907314
+g5391 chromosome_5 2315498
+chromosome_5	phytozome8_0	exon	2315470	2315497	.	-	.	ID=PAC:26897662.exon.6;pacid=26897662;Parent=PAC:26897662;ness_ID=26897662
+Cre06.g265550 chromosome_6 2122297
+chromosome_6	phytozome8_0	exon	2122193	2122295	.	-	.	ID=PAC:26893506.exon.4;pacid=26893506;Parent=PAC:26893506;ness_ID=26893506
+Cre08.g362650 chromosome_8 1131421
+chromosome_8	phytozome8_0	exon	1131423	1131551	.	-	.	ID=PAC:26888200.exon.20;pacid=26888200;Parent=PAC:26888200;ness_ID=26888200
+```
+
+Creating a data frame for these:
+
+```{r}
+splice_sites = data.frame(
+  chromosome = c('chromosome_12', 'chromosome_5', 'chromosome_6', 'chromosome_8'),
+  position = c(8771346, 2315498, 2122297, 1131421)
+)
+
+# adding a silent/nonsilent column to the adaptation data frame
+adaptation_silent_nonsilent = adaptation %>% 
+  mutate(site_type = case_when(
+    Nonsyn_V_Syn != 'synonymous' & intronic == 0 & intergenic == 0 ~ 'nonsilent',
+    Nonsyn_V_Syn == 'synonymous' | intronic == 1 | intergenic == 1 ~ 'silent'
+  )) %>% 
+  mutate(site_type = ifelse(
+    chromosome %in% splice_sites$chromosome & position %in% splice_sites$position, 'nonsilent', site_type
+  )) # 119 each
+
+```
+
+Getting mutation counts:
+
+```{r}
+get_counts = function(d) {
+  count_table <- d %>% 
+    select(mutation) %>% 
+    mutate(
+      type = case_when(
+        mutation == 'T>G' ~ 'A>C',
+        mutation == 'T>C' ~ 'A>G',
+        mutation == 'T>A' ~ 'A>T',
+        mutation == 'G>T' ~ 'C>A',
+        mutation == 'G>C' ~ 'C>G',
+        mutation == 'G>A' ~ 'C>T',
+        TRUE ~ mutation
+      )
+    ) %>% 
+    count(type, name = 'count')
+  return(count_table)
+}
+
+count_table = list(
+    # salt_nonsilent = salt %>% filter(nonsyn_v_syn != 'nonsynonymous'), 
+    # salt_silent = salt %>% filter(nonsyn_v_syn == 'synonymous'),
+    salt_0 = salt %>% filter(sample_type == '0'),
+    salt_5 = salt %>% filter(sample_type == '5'),
+    ma = ma, 
+    # adaptation = adaptation
+    adaptation_nonsilent = adaptation_silent_nonsilent %>% filter(site_type == 'nonsilent'),
+    adaptation_silent = adaptation_silent_nonsilent %>% filter(site_type == 'silent')
+  ) %>% 
+  map_dfr(., get_counts, .id = 'name')
+
+# separating three salt MA groups in separate count table
+salt_group_table = salt %>% 
+  mutate(group_type = paste(sample_group, sample_type, sep = '_')) %>% 
+  split(.$group_type) %>% 
+  map_dfr(., get_counts, .id = 'name')
+  
+count_table
+
+```
+
+## Calculated expected mutation counts
+
+Expected mutation rates:
+
+```{r}
+obs_exp = count_table %>% 
+  # get the total mutations per anc mut per sample (e.g. all A anc muts in saltMA)
+  mutate(anc_mut = substr(type, 1, 1)) %>% 
+  mutate(group = str_extract(name, '(salt_[05]|ma|adaptation)')) %>% 
+  group_by(name) %>% 
+  mutate(total_mut_anc = sum(count)) %>% 
+  ungroup() %>% 
+  # get expected number of muts (1/3 prob for either base)
+  mutate(expected_count = case_when(
+    anc_mut == 'A' ~ ceiling((total_mut_anc * 0.365) / 3),
+    anc_mut == 'C' ~ ceiling((total_mut_anc * 0.635) / 3))
+    ) %>% 
+  # get obs / exp
+  mutate(obs_exp = count / expected_count)
+
+obs_exp
+
+obs_exp_salt = salt_group_table %>% 
+  mutate(anc_mut = substr(type, 1, 1)) %>% 
+  group_by(name) %>% 
+  mutate(total_mut_anc = sum(count)) %>% 
+  ungroup() %>% 
+  # get expected number of muts
+  mutate(expected_count = case_when(
+    anc_mut == 'A' ~ ceiling((total_mut_anc * 0.365) / 3),
+    anc_mut == 'C' ~ ceiling((total_mut_anc * 0.635) / 3))
+    ) %>% 
+  # get obs / exp
+  mutate(obs_exp = count / expected_count) %>% 
+  # add missing rows
+  add_row(name = 'CC_0', type = 'A>T') %>% 
+  add_row(name = 'SL_0', type = 'C>G') %>% 
+  add_row(name = 'SL_0', type = 'C>T') %>% 
+  add_row(name = 'SL_5', type = 'A>T') %>% 
+  add_row(name = 'SL_5', type = 'A>G') %>% 
+  add_row(name = 'SL_5', type = 'C>T') %>% 
+  add_row(name = 'SL_5', type = 'C>G') %>% 
+  mutate(across(where(is.numeric), .fns = ~ ifelse(is.na(.), 0, .))) %>% 
+  mutate(anc_mut = substr(type, 1, 1))
+
+obs_exp_salt
+  
+```
+
+## Plots
+
+```{r}
+obs_exp %>% 
+  mutate(
+    xcol = str_replace(type, '>', ' \u2192 '),
+    name = case_when(
+      name == 'adaptation_nonsilent' ~ 'HS lines (non-silent sites)',
+      name == 'adaptation_silent' ~ 'HS lines (silent sites)',
+      name == 'ma' ~ 'MA',
+      name == 'salt_0' ~ 'Salt MA (control)',
+      name == 'salt_5' ~ 'Salt MA (salt)'
+    )) %>% 
+  mutate(
+    name = fct_relevel(name, 
+      c('MA', 'HS lines (non-silent sites)', 'HS lines (silent sites)', 
+        'Salt MA (control)', 'Salt MA (salt)'))
+  ) %>% 
+ggplot(
+  aes(x = xcol, y = obs_exp, fill = name)) +
+  geom_bar(
+    stat = 'identity', 
+    position = position_dodge(),
+    color = 'black') +
+  geom_hline(aes(yintercept = 1), linetype = 'dashed') +
+  coord_cartesian(
+    y = c(0, 2.5)
+  ) +
+  theme_classic() +
+  labs(
+    x = 'Base change type',
+    y = 'Observed over expected'
+  ) +
+  theme(
+    axis.text = element_text(size = 12, color = 'black'),
+    axis.title = element_text(size = 12, color = 'black'),
+    legend.title = element_blank(),
+    # legend.position = c(0.2, 0.88),
+    legend.position = 'top',
+    legend.background = element_blank(),
+    legend.text = element_text(size = 10, color = 'black')
+  ) +
+  guides(
+    fill = guide_legend(ncol = 2, nrow = 3)
+  ) +
+  scale_fill_manual(values = wes_palette(7, name = 'Darjeeling1', type = 'continuous')[3:7])
+
+
+```
+
+Separating the MA/HS and individual groups for salt MA:
+
+```{r}
+palette = wes_palette(12, name = 'Darjeeling1', type = 'continuous')
+
+obs_exp_salt %>% 
+  mutate(
+    xcol = str_replace(type, '>', ' \u2192 ')) %>% 
+ggplot(
+  aes(x = xcol, y = obs_exp, fill = name)) +
+  geom_bar(
+    stat = 'identity', 
+    position = position_dodge(),
+    color = 'black') +
+  geom_hline(aes(yintercept = 1), linetype = 'dashed') +
+  coord_cartesian(
+    y = c(0, 2.5)
+  ) +
+  theme_classic() +
+  labs(
+    x = 'Base change type',
+    y = 'Observed over expected'
+  ) +
+  theme(
+    axis.text = element_text(size = 12, color = 'black'),
+    axis.title = element_text(size = 12, color = 'black'),
+    legend.title = element_blank(),
+    # legend.position = c(0.2, 0.88),
+    legend.position = 'top',
+    legend.background = element_blank(),
+    legend.text = element_text(size = 10, color = 'black')
+  ) +
+  guides(
+    fill = guide_legend(ncol = 3, nrow = 2)
+  ) +
+  scale_fill_manual(
+    values = c(palette[4], palette[5], # CC
+               palette[7], palette[9], # DL 
+               palette[11], palette[12])) # SL
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
