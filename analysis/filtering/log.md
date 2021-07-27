@@ -2652,6 +2652,40 @@ and we're finally done!
 
 continuing this in the `rate` log
 
+## 26/7/2021
+
+one last thing - removing the multi/recurrent indels and creating
+a mut describer file for the remainder
+
+```R
+# in data/mutations/mut_tables
+
+library(tidyverse)
+
+d_full = read_tsv('all_indels.tsv', col_types = cols()) %>%
+    mutate(fname = str_replace(fname, '_samples', ''))
+d_multi = read_tsv('multi_indels.tsv', col_types = cols()) %>%
+    mutate(fname = str_replace(fname, '_combined', ''))
+
+lookup = setdiff(
+    select(d_full, fname, chrom, pos),
+    select(d_multi, fname, chrom, pos))
+
+d_keep = inner_join(d_full, lookup) %>%
+    mutate(fname = paste0(fname, '_samples'))
+write_tsv(d_keep, 'filtered_indels.tsv')
+```
+
+and now for mut describer:
+
+```bash
+time python analysis/filtering/mut_describer.py \
+--fname data/mutations/mut_tables/filtered_indels.tsv \
+--vcf_path data/alignments/genotyping/HC/combined \
+--ref_fasta data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+--ant_file data/references/annotation_table.txt.gz \
+--outname data/mutations/mut_describer/indels_described.tsv
+```
 
 
 

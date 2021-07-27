@@ -89,7 +89,13 @@ def describe_mut(d_in, vcf_path, ref_fasta, ant_file, pop_vcf_file) -> dict:
     d['type'] = mut.mutation_type(vcf_file)
     vcf_reader = VCF(vcf_file)
     vcf_rec = [rec for rec in vcf_reader(f'{chrom}:{pos}-{pos}')
-              if rec.POS == pos][0]
+              if rec.POS == pos]
+    bases = [d['ref']]
+    bases.extend(d['alt'])
+    if max([len(base) for base in bases]) == 1:
+        vcf_rec = [rec for rec in vcf_rec if rec.is_snp][0]
+    elif max([len(base) for base in bases]) > 1:
+        vcf_rec = [rec for rec in vcf_rec if rec.is_indel][0]
 
     # use fname to get sample and 0 and 5 names
     print(fname)
@@ -122,7 +128,7 @@ def describe_mut(d_in, vcf_path, ref_fasta, ant_file, pop_vcf_file) -> dict:
     elif gt_0_count > gt_5_count: # 5 sample is the mutant
         d['mutant_sample'] = sample[1]
         d['mutation'] = '>'.join([base_0, base_5])
-    elif gt_0_count == gt_5_count:
+    elif gt_0_count == gt_5_count and vcf_rec.is_snp: # only for muts
         tqdm.write(f"[saltMA] WARNING: this probably shouldn't happen - see {sample} {chrom} {pos}")
         tqdm.write('[saltMA] trying to resolve using ancestry...')
 
@@ -140,16 +146,27 @@ def describe_mut(d_in, vcf_path, ref_fasta, ant_file, pop_vcf_file) -> dict:
         sub_genotypes = [vcf_rec.gt_bases[idx] for idx in sub_indices]
         sub_0_count = sub_genotypes.count(vcf_rec.gt_bases[idx_0])
         sub_5_count = sub_genotypes.count(vcf_rec.gt_bases[idx_5])
+
+        if max([sub_0_count, sub_5_count]) == 0:
+            tqdm.write("[saltMA] looks like this mut wasn't in the 0 or 5...  {}")
+            tqdm.write(f"[saltMA] mutation at {sample} {chrom} {pos}")
+            tqdm.write("[saltMA] this shouldn't happen. skipping...")
+            return None
         if sub_0_count < sub_5_count:
             d['mutant_sample'] = sample[0]
             d['mutation'] = '>'.join([base_5, base_0])
-            tqdm.write('resolved')
+            tqdm.write('[saltMA] resolved')
         elif sub_0_count > sub_5_count:
             d['mutant_sample'] = sample[1]
             d['mutation'] = '>'.join([base_0, base_5])
             tqdm.write('[saltMA] resolved')
         elif sub_0_count == sub_5_count:
             raise Exception(f'could not solve mut with ancestry - {sample} {chrom} {pos}')
+    elif gt_0_count == gt_5_count and vcf_rec.is_indel: # indels
+        tqdm.write(f'[saltMA] looks like {sample} {chrom} {pos} only has calls in the 0 and 5')
+        tqdm.write('[saltMA] setting mutation and mutant sample to NA')
+        d['mutation'] = 'NA'
+        d['mutant_sample'] = 'NA'
 
     # purity
     purity = mut.purity(vcf_file)
