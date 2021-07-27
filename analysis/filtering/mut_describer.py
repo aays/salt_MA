@@ -90,6 +90,8 @@ def describe_mut(d_in, vcf_path, ref_fasta, ant_file, pop_vcf_file) -> dict:
     vcf_reader = VCF(vcf_file)
     vcf_rec = [rec for rec in vcf_reader(f'{chrom}:{pos}-{pos}')
               if rec.POS == pos]
+
+    # determine whether snp or indel
     bases = [d['ref']]
     bases.extend(d['alt'])
     if max([len(base) for base in bases]) == 1:
@@ -98,7 +100,6 @@ def describe_mut(d_in, vcf_path, ref_fasta, ant_file, pop_vcf_file) -> dict:
         vcf_rec = [rec for rec in vcf_rec if rec.is_indel][0]
 
     # use fname to get sample and 0 and 5 names
-    print(fname)
     if fname.startswith('DL41'): # have to hardcode this for now...
         sample = ['DL41_0', 'DL46_5']
     elif fname.startswith('DL46'):
@@ -108,7 +109,7 @@ def describe_mut(d_in, vcf_path, ref_fasta, ant_file, pop_vcf_file) -> dict:
     else:
         sample = [fname.replace('samples', '') + str(n) for n in [0, 5]]
 
-    # assign mut and determine mut sample
+    # assign mut and prep mut sample determination
     if sample[0]:
         idx_0 = vcf_reader.samples.index(sample[0])
         base_0 = vcf_rec.gt_bases[idx_0][0]
@@ -118,16 +119,20 @@ def describe_mut(d_in, vcf_path, ref_fasta, ant_file, pop_vcf_file) -> dict:
         idx_0 = None
         base_0 = d['ref']
         gt_0_count = vcf_rec.num_hom_ref
-    # we always have a '5' sample
+    # we always have a '5' sample, even in SL26
     idx_5 = vcf_reader.samples.index(sample[1])
     base_5 = vcf_rec.gt_bases[idx_5][0]
     gt_5_count = list(vcf_rec.gt_bases).count(vcf_rec.gt_bases[idx_5])
+
+    # use gt counts to determine mutant sample
     if gt_0_count < gt_5_count: # 0 sample is the mutant
         d['mutant_sample'] = sample[0]
         d['mutation'] = '>'.join([base_5, base_0])
     elif gt_0_count > gt_5_count: # 5 sample is the mutant
         d['mutant_sample'] = sample[1]
         d['mutation'] = '>'.join([base_0, base_5])
+
+    # if gt counts don't work - try to resolve using other samples
     elif gt_0_count == gt_5_count and vcf_rec.is_snp: # only for muts
         tqdm.write(f"[saltMA] WARNING: this probably shouldn't happen - see {sample} {chrom} {pos}")
         tqdm.write('[saltMA] trying to resolve using ancestry...')
@@ -147,11 +152,14 @@ def describe_mut(d_in, vcf_path, ref_fasta, ant_file, pop_vcf_file) -> dict:
         sub_0_count = sub_genotypes.count(vcf_rec.gt_bases[idx_0])
         sub_5_count = sub_genotypes.count(vcf_rec.gt_bases[idx_5])
 
+        # this should never happen, but will raise a warning instead of breaking
         if max([sub_0_count, sub_5_count]) == 0:
             tqdm.write("[saltMA] looks like this mut wasn't in the 0 or 5...  {}")
             tqdm.write(f"[saltMA] mutation at {sample} {chrom} {pos}")
             tqdm.write("[saltMA] this shouldn't happen. skipping...")
             return None
+
+        # compare calls across all samples 
         if sub_0_count < sub_5_count:
             d['mutant_sample'] = sample[0]
             d['mutation'] = '>'.join([base_5, base_0])
@@ -162,6 +170,9 @@ def describe_mut(d_in, vcf_path, ref_fasta, ant_file, pop_vcf_file) -> dict:
             tqdm.write('[saltMA] resolved')
         elif sub_0_count == sub_5_count:
             raise Exception(f'could not solve mut with ancestry - {sample} {chrom} {pos}')
+
+    # two samples separate from each other but no calls to compare - only happens in indels
+    # will set mutant sample to NA and move on
     elif gt_0_count == gt_5_count and vcf_rec.is_indel: # indels
         tqdm.write(f'[saltMA] looks like {sample} {chrom} {pos} only has calls in the 0 and 5')
         tqdm.write('[saltMA] setting mutation and mutant sample to NA')
