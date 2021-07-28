@@ -296,6 +296,24 @@ d_salt = map_dfr(salt_fnames, read_tsv, col_types = cols())
 write_tsv(d_salt, 'salt_all.tsv')
 ```
 
+## 28/7/2021
+
+regenerating the triplet dataset for the updated adaptation dataset - first,
+need to convert csv to tsv
+
+```bash
+# in data/prev/
+sed 's/,/\t/g' all_mutations_w_shared_hmmIBD_corrected_FPKM.csv > adaptation_muts.tsv
+```
+
+and now for triplets:
+
+```bash
+time python analysis/spectrum_context/get_triplets.py \
+--fname data/prev/adaptation_muts.tsv \
+--vcf data/spectrum_context/adaptation/salt_aligned_salt_UG_diploid.vcf.gz \
+--out data/spectrum_context/triplets/adaptation_all.tsv
+```
 
 
 

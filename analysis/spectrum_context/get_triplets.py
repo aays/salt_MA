@@ -92,12 +92,15 @@ def parse_line(line_dict, vcf) -> dict:
     vcf_reader = VCF(vcf)
     records = [rec for rec in vcf_reader(f'{chrom}:{int(pos)-1}-{int(pos)+1}')]
     if any([rec.is_indel for rec in records]):
+        tqdm.write(f'[saltMA] WARNING: skipping {mutant_sample} {chrom} {pos} due to adj indel')
+        # tqdm.write(','.join([rec.__repr__() for rec in records]))
         return None
     sample_idx = vcf_reader.samples.index(mutant_sample)
     bases = [rec.gt_bases[sample_idx] for rec in records]
     try:
         assert len(bases) == 3
     except:
+        tqdm.write(f'[saltMA] WARNING: skipping unparseable triplet at {mutant_sample} {chrom} {pos}')
         return None # could not parse triplet
 
     # assemble triplet strings
