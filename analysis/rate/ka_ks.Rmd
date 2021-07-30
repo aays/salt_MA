@@ -10,7 +10,9 @@ output: pdf_notebook
 library(tidyverse)
 library(fs)
 library(here)
+library(boot)
 library(broom)
+library(tictoc)
 ```
 
 # Data import
@@ -82,7 +84,7 @@ genome_sample_counts = all_genome %>%
 and now to calculate Ka/Ks:
 
 ```{r}
-genome_sample_counts %>% 
+ka_ks_genome = genome_sample_counts %>% 
   
 # join callables and counts
   full_join(
@@ -97,7 +99,10 @@ genome_sample_counts %>%
   ) %>% 
   mutate(
     ka_ks = ka / ks
-  )
+  ) %>% 
+  select(sample_group, sample_type, ka_ks, everything())
+
+ka_ks_genome
 ```
 
 ## Bootstrap confidence intervals
@@ -125,36 +130,41 @@ muts_described = read_tsv(
   )
 ```
 
-Resampling muts with replacement:
+### Resampling muts with replacement
 
 ```{r}
-ka_ks_calc = function(run_id) {
-  # resample (w/ replacement) mutations in each sample group + type - 6 total groups
-  d_resampled = muts_described %>% 
-    group_by(sample_group, sample_type) %>% 
-    slice_sample(prop = 1, replace = TRUE)
-  
-  # compute ka/ks value for each
+ka_ks_calc = function(d, indices) {
+  d_resampled = d[indices,]
   d_summarised = d_resampled %>% 
     
-    # get counts of nonsyn and syn muts
+    # restructure resampled dataset to match join from earlier
     group_by(sample_group, sample_type) %>% 
     count(nonsyn_v_syn) %>% 
-    pivot_wider(
-      names_from = nonsyn_v_syn,
-      values_from = n,
-      values_fill = 0 # SL syn
-    ) %>% 
-    # some cleanup
+    ungroup() %>% 
+    pivot_wider(names_from = nonsyn_v_syn, values_from = n, values_fill = 0) 
+  
+  if (!'synonymous' %in% colnames(d_summarised)) {
+    d_summarised$synonymous = 0
+  }
+  
+  # get sample group and type
+  current_sample_group = unique(d_summarised$sample_group)
+  current_sample_type = unique(d_summarised$sample_type)
+  
+  # get callables to compute ka/ks
+  d_summarised = d_summarised %>% 
     rename(nonsyn_muts = nonsynonymous, syn_muts = synonymous) %>% 
     mutate(sample_type = as.numeric(sample_type)) %>% 
     
     # get ka/ks
     full_join(
-      genome_sample_callables, by = c('sample_group', 'sample_type')
+      filter(genome_sample_callables,
+             sample_group == current_sample_group,
+             sample_type == current_sample_type), 
+      by = c('sample_group', 'sample_type')
     ) %>% 
-      replace_na(
-        list(nonsyn_muts = 0, syn_muts = 0)
+    replace_na(
+      list(nonsyn_muts = 0, syn_muts = 0)
     ) %>% 
     mutate(
       ka = nonsyn_muts / nonsyn,
@@ -165,49 +175,59 @@ ka_ks_calc = function(run_id) {
     
     # remove extra columns and prep for 'export'
     select(sample_group, sample_type, ka_ks) %>% 
-    ungroup() %>% 
-    mutate(run_id = run_id)
+    ungroup()
 
-    return(d_summarised)
+    return(d_summarised$ka_ks)
 }
-
-ka_ks_boot_vals = map_dfr(1:1000, ~ ka_ks_calc(.)) # runs for ~30 seconds
 
 ```
 
-Calculate confidence intervals from bootstrap vals:
+### Calculate confidence intervals from bootstrap vals
 
 ```{r}
-boot_vals_list = ka_ks_boot_vals %>% 
-  filter(sample_group != 'SL') %>% # all inf/NA due to lack of data
-  mutate(sample_factor = paste(sample_group, sample_type, sep = '_')) %>% 
-  split(.$sample_factor)
-
-get_cis = function(d) {
-  d_id = d %>% 
-    select(sample_factor) %>% 
-    unlist() %>% 
-    unique() 
-  
-  boot_vals = d %>% 
-    select(ka_ks) %>% 
-    filter(!is.na(ka_ks), is.finite(ka_ks)) %>% 
-    unlist() %>% 
-    t.test(., alternative = 'two.sided', mu = 0, conf.level = 0.95) %>% 
-    tidy()
-  
-  boot_vals$sample_factor = d_id
-  boot_vals = select(boot_vals, sample_factor, conf.low, conf.high, everything())
-  
-  return(boot_vals)
+get_cis = function(d, rep_count) {
+  tic(msg = paste('bootstrap for', unique(d$sample_factor)))
+  message(paste('starting', unique(d$sample_factor)))
+  boot_obj = boot(data = d, statistic = ka_ks_calc, R = rep_count)
+  ci_obj = boot.ci(boot_obj, type = 'bca')$bca[c(4,5)] # lower and upper bounds
+  out = data.frame(
+    sample_group = unique(d$sample_group),
+    sample_type = unique(d$sample_type),
+    lower_ci = ci_obj[1],
+    upper_ci = ci_obj[2]
+  )
+  toc(log = TRUE)
+  return(out)
 }
 
-map_dfr(
-  boot_vals_list,
-  ~ get_cis(.)
-)
+ka_ks_cis = muts_described %>% 
+  mutate(sample_factor = paste(sample_group, sample_type, sep = '_')) %>% 
+  filter(sample_group != 'SL') %>% 
+  split(.$sample_factor) %>% 
+  map_dfr(~ get_cis(., 1000)
+  ) 
+
+ka_ks_cis
 
 ```
+
+### Combining with Ka/Ks values above
+
+```{r}
+ka_ks_genome_final = ka_ks_genome %>% 
+  mutate(sample_type = as.character(sample_type)) %>% 
+  full_join(
+    ka_ks_cis,
+    by = c('sample_group', 'sample_type')) %>% 
+  select(sample_group, sample_type, ka_ks, contains('ci'), everything())
+
+ka_ks_genome_final
+
+write_tsv(
+  ka_ks_genome_final, 
+  file = here('data/rate/ka_ks/ka_ks_genome_final_CIs.tsv'))
+```
+
 
 
 ## Expressed genes
@@ -247,11 +267,12 @@ all_expressed_callables$actual_gene_name = g_temp
 Joining the callables dataset with the mutation counts and computing Ka/Ks:
 
 ```{r}
-all_expressed %>% 
+expressed_ka_ks = all_expressed %>% 
   
   # transform to long format and separate by sample type
   pivot_longer(cols = contains('muts'), names_to = 'measure') %>% 
   mutate(
+    sample_group = str_extract(sample, '^[A-Z]{2}'),
     sample_type = str_extract(sample, '([05])$'), 
     measure_type = str_extract(measure, '([0-5])$')) %>% 
   mutate( 
@@ -268,21 +289,24 @@ all_expressed %>%
     all_expressed_callables %>% 
       rename(all_names = gene_name) %>% 
       rename(gene_name = actual_gene_name) %>% 
-      select(-all_names),
-    by = c('sample', 'gene_name')
+      select(-all_names) %>% 
+      mutate(
+        sample_group = str_extract(sample, '^[A-Z]{2}'),
+        sample_type = str_extract(sample, '[05]$')
+      ) %>% 
+      group_by(sample_group, sample_type, gene_name) %>% 
+      summarise(nonsyn = sum(nonsyn), syn = sum(syn)),
+    by = c('sample_group', 'sample_type', 'gene_name')
   ) %>% 
-  
+
   # some data cleanup post full join
   distinct() %>% # full join induced some duplicates
   arrange(sample) %>% 
-  mutate(sample_type = str_extract(sample, '([05])$')) %>%  # for newly added rows 
   mutate(nonsyn_muts = ifelse(is.na(nonsyn_muts), 0, nonsyn_muts),
          syn_muts = ifelse(is.na(syn_muts), 0, syn_muts)) %>% 
   
   # group by sample group and sample type and get sums for mut counts and callable counts
-  mutate(sample_group = str_extract(sample, '^[A-Z]{2}')) %>% 
-  select(sample, sample_group, sample_type, gene_name, 
-         chrom, start, end, everything(), -contains('fold')) %>% 
+  select(sample, sample_group, sample_type, gene_name, everything()) %>% 
   group_by(sample_group, sample_type) %>% 
   summarise(across(contains('syn'), sum)) %>% 
   
@@ -293,11 +317,195 @@ all_expressed %>%
   ) %>% 
   mutate(
     ka_ks = ka / ks
+  ) %>% 
+  select(
+    sample_group, sample_type, ka_ks, everything()
   )
+
+expressed_ka_ks
 ```
 
 
+## Bootstrap confidence intervals
 
+Need to bootstrap original mutation dataset once again, but it'll have to be
+exclusively for mutations in expressed genes:
+
+```{r}
+muts_described_expressed = read_tsv(
+  here('data/mutations/mut_describer/muts_described.final.tsv'),
+  col_types = cols()
+) %>% 
+  
+  # keep cols of interest - including feature_ID
+  select(
+    chromosome, position, sample = mutant_sample, 
+    nonsyn_v_syn, gene_name = feature_ID
+  ) %>% 
+  filter(!is.na(nonsyn_v_syn)) %>% 
+  
+  # join with list of genes
+  inner_join(
+    all_expressed, by = c('sample', 'gene_name')
+  ) %>% 
+  
+  # add sample group and type as cols
+  mutate(
+    sample_group = str_extract(sample, '^[A-Z]{2}'),
+    sample_type = str_extract(sample, '[05]$')
+  ) %>% 
+  select(
+    sample_group, sample_type, chromosome, position, sample, gene_name, nonsyn_v_syn
+  ) %>% 
+  arrange(sample_group, sample_type)
+```
+
+### Resampling muts with replacement
+
+```{r}
+ka_ks_gene_boot = function(d, indices) {
+  # compute ka/ks value for each
+  d_resampled = d[indices,]
+  d_summarised = d_resampled %>% 
+    
+    # restructure resampled dataset to match join from earlier
+    group_by(sample, gene_name, sample_group, sample_type) %>% 
+    count(nonsyn_v_syn) %>% 
+    ungroup() %>% 
+    pivot_wider(names_from = nonsyn_v_syn, values_from = n, values_fill = 0) 
+  
+  if (!'synonymous' %in% colnames(d_summarised)) {
+    d_summarised$synonymous = 0
+  }
+  
+  # get sample group and type
+  current_sample_group = unique(d_summarised$sample_group)
+  current_sample_type = unique(d_summarised$sample_type)
+  
+  # get callables
+  d_summarised = d_summarised %>% 
+    rename(nonsyn_muts = nonsynonymous, syn_muts = synonymous) %>% 
+    
+    # get callable counts based on genes
+    full_join(
+      all_expressed_callables %>% 
+        rename(all_names = gene_name) %>% 
+        rename(gene_name = actual_gene_name) %>% 
+        select(-all_names) %>% 
+        mutate(
+          sample_group = str_extract(sample, '^[A-Z]{2}'),
+          sample_type = str_extract(sample, '[05]$')
+        ) %>% 
+        filter(
+          sample_group == current_sample_group,
+          sample_type == current_sample_type
+        ) %>% 
+        group_by(sample_group, sample_type, gene_name) %>% 
+        summarise(nonsyn = sum(nonsyn), syn = sum(syn), .groups = 'drop_last'),
+      by = c('sample_group', 'sample_type', 'gene_name')
+    ) %>% 
+  
+    # some data cleanup post full join
+    distinct() %>% # full join induced some duplicates
+    arrange(sample) %>% 
+    replace_na(list(nonsyn_muts = 0, syn_muts = 0)) %>% 
+    
+    # group by sample group and sample type and get sums for mut counts and callable counts
+    select(sample, sample_group, sample_type, gene_name, everything()) %>% 
+    group_by(sample_group, sample_type) %>% 
+    summarise(across(contains('syn'), sum), .groups = 'drop_last') %>% 
+    
+    # compute Ka, Ks, and Ka/Ks values for 0 and 5 samples across sample groups
+    mutate(
+      ka = nonsyn_muts / nonsyn,
+      ks = syn_muts / syn
+    ) %>% 
+    mutate(
+      ka_ks = ka / ks
+    ) %>% 
+    select(
+      sample_group, sample_type, ka_ks, everything()
+    )
+  
+  return(d_summarised$ka_ks)
+      
+}
+
+```
+
+### Calculating confidence intervals
+
+```{r}
+get_expressed_cis = function(d, rep_count) {
+  tic(msg = paste('bootstrap for', unique(d$sample_factor)))
+  message(paste('starting', unique(d$sample_factor)))
+  boot_obj = boot(data = d, statistic = ka_ks_gene_boot, R = rep_count)
+  ci_obj = boot.ci(boot_obj, type = 'bca')$bca[c(4,5)] # lower and upper bounds
+  out = data.frame(
+    sample_group = unique(d$sample_group),
+    sample_type = unique(d$sample_type),
+    lower_ci = ci_obj[1],
+    upper_ci = ci_obj[2]
+  )
+  toc(log = TRUE)
+  return(out)
+}
+
+expressed_set_cis = muts_described_expressed %>% 
+  mutate(sample_factor = paste(sample_group, sample_type, sep = '_')) %>% 
+  filter(sample_group != 'SL') %>% 
+  split(.$sample_factor) %>% 
+  map_dfr(~ get_expressed_cis(., 1000)
+  ) # takes a minute per group
+
+expressed_set_cis
+
+```
+Joining with orig Ka/Ks values:
+
+```{r}
+ka_ks_expressed_final = expressed_ka_ks %>% 
+  full_join(expressed_set_cis, by = c('sample_group', 'sample_type')) %>% 
+  select(sample_group, sample_type, ka_ks, contains('ci'), everything())
+
+ka_ks_expressed_final
+
+write_tsv(
+  ka_ks_expressed_final, 
+  file = here('data/rate/ka_ks/ka_ks_expressed_final_CIs.tsv'))
+```
+
+
+# Plots
+
+Ka/Ks for the genome:
+
+```{r}
+ka_ks_genome_final %>% 
+  ggplot(aes(x = sample_group, y = ka_ks, fill = sample_type)) +
+  geom_bar(stat = 'identity', position = position_dodge(width = 0.9)) +
+  geom_errorbar(
+    aes(ymin = lower_ci, ymax = upper_ci, group = sample_type),
+    position = position_dodge(width = 0.9),
+    size = 0.5, width = 0.25) +
+  theme_classic() +
+  scale_fill_viridis_d(begin = 0.5, end = 1)
+```
+
+For the expressed gene set:
+
+```{r}
+ka_ks_expressed_final %>% 
+  ggplot(aes(x = sample_group, y = ka_ks, fill = sample_type)) +
+  geom_bar(stat = 'identity', position = position_dodge(width = 0.9)) +
+  geom_errorbar(
+    aes(ymin = lower_ci, ymax = upper_ci, group = sample_type),
+    position = position_dodge(width = 0.9),
+    size = 0.5, width = 0.25) +
+  theme_classic() +
+  scale_fill_viridis_d(begin = 0.5, end = 1)
+
+```
 
 
 
