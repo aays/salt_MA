@@ -1,0 +1,220 @@
+---
+title: "Annotations"
+author: Ahmed Hasan
+output: pdf_document
+---
+
+To do:
+
+1. Get proportion of new muts in CDS/UTRs/introns/intergenic across groups + types
+2. Get proportion of new muts in the same annotations for salt/expressed gene sets
+3. Generate bootstrap confidence intervals
+4. Will likely need to repeat all of the above for MA/adaptation datasets! 
+
+# Import packages and load in data
+
+```{r}
+library(tidyverse)
+library(fs)
+library(here)
+library(boot)
+library(tictoc)
+```
+
+TODO: update with MA/adaptation files once you get to them
+
+TODO: create updated mut describer files that list whether genes are in the expressed/salt datasets
+
+```{r}
+salt_ma = read_tsv(
+  here('data/mutations/mut_describer/muts_described.final.tsv'),
+  col_types = cols()
+) %>% 
+  mutate(
+    sample_group = str_extract(mutant_sample, '^[A-Z]{2}'),
+    sample_type = str_extract(mutant_sample, '[05]$'),
+    sample_factor = paste(sample_group, sample_type, sep = '_')
+  )
+```
+
+# Salt MA
+
+## Mutation proportions
+
+```{r}
+salt_ma_prop = salt_ma %>% 
+  
+  group_by(sample_group, sample_type) %>% 
+  
+  # select annotations and sum
+  select(
+    sample_group, sample_type, CDS, 
+    utr5, utr3, intronic, intergenic
+  ) %>% 
+  summarise(across(where(is.numeric), sum), .groups = 'keep') %>% 
+  
+  # create annotation and value column + get total
+  pivot_longer(
+    names_to = 'annotation', 
+    values_to = 'count', 
+    cols = where(is.numeric)
+  ) %>% 
+  mutate(
+    total = sum(count),
+    prop = count / total)
+  
+salt_ma_prop
+```
+
+## Bootstrap CIs
+
+```{r}
+prop_count = function(d, indices, ant) {
+  d_resampled = d[indices, ]
+  prop_value = d_resampled %>% 
+    
+    # get proportions for each annotation from resampled dataset
+    select(CDS, utr5, utr3, intronic, intergenic) %>% 
+    summarise(across(where(is.numeric), sum)) %>% 
+    pivot_longer(
+      names_to = 'annotation',
+      values_to = 'count',
+      cols = where(is.numeric)
+    ) %>% 
+    mutate(
+      total = sum(count),
+      prop = count / total
+    ) %>% 
+    
+    # only keep proportion for annotation of interest
+    filter(annotation == ant) %>% 
+    select(prop) %>% 
+    unlist()
+  
+  return(prop_value)    
+}
+
+test_boot_obj = boot(
+  data = salt_ma %>% 
+    filter(sample_group == 'CC', sample_type == '0'), 
+  statistic = prop_count, R = 1000, ant = 'CDS')
+
+
+```
+
+Creating a function for this:
+
+```{r}
+full_boot_ci = function(d, ant, rep_count) {
+  cis_all = d %>% 
+    split(.$sample_factor) %>% 
+    map_dfr(., function(d_sub) {
+      tic(msg = paste('bootstrap for', unique(d_sub$sample_factor), ant))
+      message(paste('starting', unique(d_sub$sample_factor), ant))
+      boot_obj = boot(data = d_sub, statistic = prop_count,
+        R = rep_count, ant = ant
+      )
+      cis = boot.ci(boot_obj, type = 'bca')$bca[c(4,5)]
+      out = data.frame(
+        ant = ant,
+        lower_ci = cis[1],
+        upper_ci = cis[2]
+      )
+      toc(log = TRUE) 
+      return(out)
+    },
+    .id = 'sample_factor'
+    )
+    return(cis_all)
+}
+
+```
+
+Running over all possible sample combinations and annotations (CC and DL)
+
+```{r}
+annotations = list('CDS', 'utr5', 'utr3', 'intronic', 'intergenic')
+
+salt_ma_cis = annotations %>% 
+  map_dfr(
+    ~ full_boot_ci(
+        salt_ma %>% filter(sample_group != 'SL'), ., 1000)
+  )
+
+salt_ma_cis
+# TODO: can we get CIs for _any_ of the SL annotations? need to check manually or write a new map_dfr
+
+salt_ma_prop_all = full_join(
+  salt_ma_prop %>% 
+    mutate(sample_factor = paste(sample_group, sample_type, sep = '_')), 
+  salt_ma_cis %>% 
+    rename(annotation = ant), 
+    by = c('sample_factor', 'annotation')
+) %>% 
+  select(sample_group, sample_type, annotation, prop, contains('ci'), everything())
+
+salt_ma_prop_all
+
+# write_tsv(salt_ma_prop_all, here('data/spatial/salt_ma_annotations_cis.tsv'))
+  
+```
+
+## Plot
+
+```{r}
+salt_ma_prop_all = read_tsv(
+  here('data/spatial/salt_ma_annotations_cis.tsv'),
+  col_types = cols()
+)
+
+salt_ma_prop_all %>% 
+  mutate(sample_type = as.character(sample_type)) %>% 
+  filter(sample_group != 'SL') %>% 
+  
+  ggplot(aes(x = annotation, y = prop, fill = sample_type)) +
+  geom_bar(stat = 'identity', position = position_dodge(width = 0.9)) +
+  facet_wrap(~ sample_group) +
+  geom_errorbar(
+    aes(ymin = lower_ci, ymax = upper_ci, group = sample_type),
+    position = position_dodge(width = 0.9),
+    size = 0.5, width = 0.25) +
+  theme_classic() +
+  theme(
+    axis.text = element_text(size = 12, color = 'black'),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.title = element_text(size = 12, color = 'black'),
+    legend.title = element_blank(),
+    # legend.position = c(0.2, 0.88),
+    legend.position = 'top',
+    legend.background = element_blank(),
+    legend.text = element_text(size = 10, color = 'black')
+  ) +
+  coord_cartesian(
+    y = c(0, 0.7)
+  )
+  
+```
+
+# Salt MA - for expressed/salt gene sets
+
+```{r}
+salt_ma_gene_sets = read_tsv(
+  here('data/rate/mut_describer/muts_described.final.gene_sets.tsv'),
+  col_types = cols()
+)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
