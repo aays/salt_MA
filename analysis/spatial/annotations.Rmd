@@ -842,7 +842,7 @@ salt_ma_final %>%
   facet_grid(
     rows = vars(sample_group), cols = vars(gene_set), scales = 'free') +
   coord_cartesian(
-    y = c(0, 1.1)
+    y = c(0, 1)
   ) +
   labs(
     x = '',
