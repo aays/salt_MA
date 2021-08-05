@@ -19,115 +19,283 @@ library(fs)
 library(here)
 library(boot)
 library(tictoc)
+library(janitor)
 ```
 
-TODO: update with MA/adaptation files once you get to them
+## Mutation datasets 
 
-TODO: create updated mut describer files that list whether genes are in the expressed/salt datasets
+Loading in the 'final' versions with gene set info columns:
 
 ```{r}
 salt_ma = read_tsv(
-  here('data/mutations/mut_describer/muts_described.final.tsv'),
+  here('data/rate/mut_describer/muts_described.final.gene_sets.tsv'),
   col_types = cols()
 ) %>% 
+  mutate(rho = as.double(rho)) %>% 
+  bind_rows(
+    read_tsv(
+      here('data/rate/mut_describer/indels_described.tsv'),
+      col_types = cols()
+    )
+  ) %>% 
   mutate(
     sample_group = str_extract(mutant_sample, '^[A-Z]{2}'),
     sample_type = str_extract(mutant_sample, '[05]$'),
     sample_factor = paste(sample_group, sample_type, sep = '_')
   )
+
+ma_original <- read_tsv(
+  here('data/rate/mut_describer/ma.gene_sets.tsv'), 
+  col_types = cols(), na = c('.')
+) %>% 
+  select(-chromosome_1, -position_1)
+
+# splice sites for silent/nonsilent classification of HS muts
+splice_sites = data.frame(
+  chromosome = c('chromosome_12', 'chromosome_5', 'chromosome_6', 'chromosome_8'),
+  position = c(8771346, 2315498, 2122297, 1131421)
+)
+
+adaptation = read_tsv(
+  here('data/rate/mut_describer/adaptation.gene_sets.tsv'),
+  col_types = cols(), na = c('.')
+) %>% 
+  mutate(site_type = case_when(
+    Nonsyn_V_Syn == 'synonymous' | intronic == 1 | intergenic == 1 ~ 'silent',
+    TRUE ~ 'nonsilent'
+  )) %>% 
+  mutate(site_type = ifelse(
+    chromosome %in% splice_sites$chromosome & position %in% splice_sites$position, 'nonsilent', site_type
+  ))
 ```
 
-# Salt MA
-
-## Mutation proportions
+## Callables files
 
 ```{r}
-salt_ma_prop = salt_ma %>% 
-  
-  group_by(sample_group, sample_type) %>% 
-  
-  # select annotations and sum
-  select(
-    sample_group, sample_type, CDS, 
-    utr5, utr3, intronic, intergenic
-  ) %>% 
-  summarise(across(where(is.numeric), sum), .groups = 'keep') %>% 
-  
-  # create annotation and value column + get total
-  pivot_longer(
-    names_to = 'annotation', 
-    values_to = 'count', 
-    cols = where(is.numeric)
-  ) %>% 
+# saltMA callables datasets
+annotation_callables = read_tsv(
+  here('data/rate/annotation_callables.tsv'),
+  col_types = cols())
+
+salt_callables = read_tsv(
+  here('data/rate/annotation_callables_samples.tsv'),
+  col_types = cols()
+) %>% 
   mutate(
-    total = sum(count),
-    prop = count / total)
+    sample_group = str_extract(sample, '^[A-Z]{2}'),
+    sample_type = str_extract(sample, '[05]$'),
+    sample_factor = paste(sample_group, sample_type, sep = '_')) %>% 
+  group_by(sample_factor, scaffold, annotation) %>% 
+  summarise(
+    sample_count = length(unique(sample)),
+    callable_total = sum(callable_total),
+    genome_count = max(genome_count),
+    .groups = 'drop'
+  ) 
+
+salt_sample_groups = salt_callables %>% 
+  select(sample_factor, sample_count) %>% 
+  distinct()
+
+
+# original MA callables
+ma_callables = read_csv(
+  here('data/prev/annotation.csv'),
+  col_types = cols()
+) %>% 
+  janitor::clean_names() %>% 
+  select(-type, -count) %>% 
+  distinct() %>% 
+  rename(
+    annotation = category,
+    callable_total = total_callable)
   
-salt_ma_prop
+# adaptation callables
+adaptation_callables = read_csv(
+  here('data/rate/adaptation_callables.csv'),
+  col_types = cols()
+) %>% 
+  # cleanup
+  janitor::clean_names() %>% 
+  select(-x1) %>% 
+  # transform
+  pivot_longer(
+    cds:intronic,
+    names_to = 'annotation',
+    values_to = 'callables'
+  ) %>% 
+  mutate(annotation = ifelse(
+    annotation == 'cds', 'CDS', annotation)) %>% 
+  group_by(annotation) %>% 
+  summarise(callable_total = sum(callables))
 ```
 
-## Bootstrap CIs
+# Mutation proportions
+
+## Salt MA
 
 ```{r}
-prop_count = function(d, indices, ant) {
-  d_resampled = d[indices, ]
-  prop_value = d_resampled %>% 
-    
-    # get proportions for each annotation from resampled dataset
-    select(CDS, utr5, utr3, intronic, intergenic) %>% 
-    summarise(across(where(is.numeric), sum)) %>% 
-    pivot_longer(
-      names_to = 'annotation',
-      values_to = 'count',
-      cols = where(is.numeric)
-    ) %>% 
-    mutate(
-      total = sum(count),
-      prop = count / total
-    ) %>% 
-    
-    # only keep proportion for annotation of interest
-    filter(annotation == ant) %>% 
-    select(prop) %>% 
-    unlist()
+props_all = list()
+
+props_all$salt_ma = salt_ma %>% 
+  group_by(sample_factor) %>% 
+  select(
+    sample_factor, sample_group, sample_type,
+    CDS, utr5, utr3, intronic, intergenic
+  ) %>% 
   
-  return(prop_value)    
+  # get n_muts per annotation per sample factor
+  summarise(
+    across(
+      where(is.numeric), sum)
+    ) %>% 
+  
+  pivot_longer(
+    cols = where(is.numeric),
+    names_to = 'annotation',
+    values_to = 'values'
+  ) %>% 
+  
+  # add callable counts
+  left_join(
+    salt_callables %>% 
+      group_by(sample_factor, annotation) %>% 
+      summarise(
+        callable_total = sum(callable_total),
+        sample_count = max(sample_count),
+        .groups = 'drop'
+      ),
+    by = c('sample_factor', 'annotation')
+  ) %>% 
+  
+  # fix sample counts
+  select(-sample_count) %>% 
+  left_join(salt_sample_groups, by = 'sample_factor') %>% 
+  group_by(sample_factor) %>% 
+  mutate(
+    numerator = (values / callable_total),
+    denominator = sum(numerator),
+    prop = numerator / denominator
+  )
+
+props_all$salt_ma
+```
+
+## MA and Adaptation
+
+```{r}
+get_props = function(d, d_callables, salt_ma_bool = FALSE) {
+  out = d %>% 
+    { if (salt_ma_bool == TRUE) group_by(., sample_factor) else . } %>% 
+    select(
+      sample_factor, CDS, utr5, utr3, intronic, intergenic
+    ) %>% 
+    
+    # get n_muts per annotation
+    summarise(
+      across(
+        where(is.numeric), sum),
+      sample_factor = unique(sample_factor)
+      ) %>% 
+    
+    pivot_longer(
+      cols = where(is.numeric),
+      names_to = 'annotation',
+      values_to = 'values'
+    )
+  
+  # add callable counts
+  if (salt_ma_bool == TRUE) {
+    out = out %>% 
+      left_join(
+        d_callables %>% 
+          group_by(sample_factor, annotation) %>% 
+          summarise(
+            callable_total = sum(callable_total),
+            .groups = 'drop'
+          ),
+        by = c('sample_factor', 'annotation')
+      ) 
+  } else if (salt_ma_bool == FALSE) {
+    out = out %>% 
+      left_join(
+        d_callables %>% 
+          group_by(annotation) %>% 
+          summarise(
+            callable_total = sum(callable_total),
+            .groups = 'drop'
+          ),
+        by = c('annotation')
+      )
+  }
+      
+  out = out %>% 
+    # fix sample counts
+    mutate(
+      numerator = (values / callable_total),
+      denominator = sum(numerator, na.rm = TRUE),
+      prop = numerator / denominator
+    )
+  return(out)
 }
 
-test_boot_obj = boot(
-  data = salt_ma %>% 
-    filter(sample_group == 'CC', sample_type == '0'), 
-  statistic = prop_count, R = 1000, ant = 'CDS')
-
-
+props_all$adaptation = get_props(
+  adaptation %>% 
+    mutate(sample_factor = 'adaptation'), adaptation_callables)
+props_all$ma_original = get_props(
+  ma_original %>% 
+    mutate(sample_factor = 'ma_original'), ma_callables)
 ```
 
-Creating a function for this:
+
+# Bootstrap CIs
 
 ```{r}
-full_boot_ci = function(d, ant, rep_count) {
+get_prop_value = function(d, indices, ant, d_callables, salt_ma_bool = FALSE) {
+  d_resampled = d[indices, ]
+  prop_value = get_props(d_resampled, d_callables, salt_ma_bool = salt_ma_bool) %>% 
+    filter(annotation == ant) %>% 
+    select(prop) %>% 
+    as.numeric()
+  return(prop_value)
+}
+
+prop_bootstrap = function(d, ant, d_callables, rep_count, salt_ma_bool = FALSE) {
   cis_all = d %>% 
     split(.$sample_factor) %>% 
     map_dfr(., function(d_sub) {
       tic(msg = paste('bootstrap for', unique(d_sub$sample_factor), ant))
       message(paste('starting', unique(d_sub$sample_factor), ant))
-      boot_obj = boot(data = d_sub, statistic = prop_count,
-        R = rep_count, ant = ant
-      )
-      cis = boot.ci(boot_obj, type = 'bca')$bca[c(4,5)]
+      
+      # check if prop is 0
+      prop_val = get_prop_value(
+        d_sub, c(1:nrow(d_sub)), ant, 
+        d_callables, salt_ma_bool = salt_ma_bool)
+      
+      # no CIs if proportion is 0
+      if (prop_val %in% c(0, 1)) {
+        message('prop val is either 0 or 1 - CIs cannot be calculated')
+        cis = c(0, 0)
+      } else {
+        message(paste('bootstrapping - prop val is', prop_val))
+        boot_obj = boot(data = d_sub, statistic = get_prop_value,
+          R = rep_count, ant = ant, d_callables = d_callables, salt_ma_bool = salt_ma_bool)
+        cis = boot.ci(boot_obj, type = 'perc')$perc[c(4, 5)]
+      }
+      
+      # prep data frame with CIs to return
       out = data.frame(
-        ant = ant,
-        lower_ci = cis[1],
-        upper_ci = cis[2]
-      )
-      toc(log = TRUE) 
+        ant = ant, lower_ci = cis[1], upper_ci = cis[2])
+      toc(log = TRUE)
       return(out)
     },
     .id = 'sample_factor'
     )
-    return(cis_all)
+  return(cis_all)
 }
 
+prop_bootstrap(adaptation %>% mutate(sample_factor = 'adaptation'), 'CDS', 
+               adaptation_callables, 500, salt_ma_bool = FALSE)
 ```
 
 Running over all possible sample combinations and annotations (CC and DL)
@@ -137,27 +305,94 @@ annotations = list('CDS', 'utr5', 'utr3', 'intronic', 'intergenic')
 
 salt_ma_cis = annotations %>% 
   map_dfr(
-    ~ full_boot_ci(
-        salt_ma %>% filter(sample_group != 'SL'), ., 1000)
-  )
+    ~ prop_bootstrap(
+        salt_ma %>% filter(sample_group != 'SL'), ., salt_callables, 1000, salt_ma_bool = TRUE)
+  ) 
+
+# TODO: need to update indel mut describe files with sample type at least?...
+# TODO: problem is that indels are 'novel' in both 0 and 5, so directionality unclear
 
 salt_ma_cis
-# TODO: can we get CIs for _any_ of the SL annotations? need to check manually or write a new map_dfr
 
 salt_ma_prop_all = full_join(
-  salt_ma_prop %>% 
-    mutate(sample_factor = paste(sample_group, sample_type, sep = '_')), 
+  props_all$salt_ma,
   salt_ma_cis %>% 
     rename(annotation = ant), 
-    by = c('sample_factor', 'annotation')
+  by = c('sample_factor', 'annotation')
 ) %>% 
-  select(sample_group, sample_type, annotation, prop, contains('ci'), everything())
+  select(sample_factor, annotation, prop, contains('ci'), everything())
 
 salt_ma_prop_all
 
-# write_tsv(salt_ma_prop_all, here('data/spatial/salt_ma_annotations_cis.tsv'))
+# doing the SLs 
+salt_ma_SL_cis = annotations %>% 
+  map_dfr(
+    ~ prop_bootstrap(
+        salt_ma %>% filter(sample_group == 'SL'), ., salt_callables, 1000, salt_ma_bool = TRUE)
+  )
+
+salt_ma_prop_all = left_join(
+  salt_ma_prop_all, 
+  salt_ma_SL_cis %>% rename(annotation = ant), 
+  by = c('sample_factor', 'annotation')) %>% 
+  mutate(
+    lower_ci.x = ifelse(is.na(lower_ci.x), lower_ci.y, lower_ci.x), 
+    upper_ci.x = ifelse(is.na(upper_ci.x), upper_ci.y, upper_ci.x)) %>% 
+  select(-lower_ci.y, -upper_ci.y) %>% 
+  rename(lower_ci = lower_ci.x, upper_ci = upper_ci.x)
   
+# write_tsv(salt_ma_prop_all, here('data/spatial/salt_ma_annotations_cis.tsv'))
+
 ```
+
+Repeating for MA and adaptation:
+
+```{r}
+# adaptation
+adaptation_cis = map_dfr(
+  annotations,
+  ~ prop_bootstrap(
+      adaptation %>% 
+        mutate(sample_factor = 'adaptation'), 
+      ., adaptation_callables, 1000, salt_ma_bool = FALSE
+  )
+)
+
+adaptation_prop_all = full_join(
+  props_all$adaptation,
+  adaptation_cis %>% 
+    rename(annotation = ant),
+  by = c('sample_factor', 'annotation')
+) %>% 
+  select(sample_factor, annotation, prop, contains('ci'), everything())
+
+adaptation_prop_all
+
+# write_tsv(adaptation_prop_all, here('data/spatial/adaptation_annotations_cis.tsv'))
+
+# ma
+ma_cis = map_dfr(
+  annotations,
+  ~ prop_bootstrap(
+    ma_original %>% 
+      mutate(sample_factor = 'ma_original'),
+    ., ma_callables, 1000, salt_ma_bool = FALSE
+  )
+)
+
+ma_prop_all = full_join(
+  props_all$ma_original,
+  ma_cis %>% 
+    rename(annotation = ant),
+  by = c('sample_factor', 'annotation')
+) %>% 
+  select(sample_factor, annotation, prop, contains('ci'), everything())
+
+ma_prop_all
+
+# write_tsv(ma_prop_all, here('data/spatial/ma_annotations_cis.tsv'))
+```
+
 
 ## Plot
 
@@ -165,7 +400,11 @@ salt_ma_prop_all
 salt_ma_prop_all = read_tsv(
   here('data/spatial/salt_ma_annotations_cis.tsv'),
   col_types = cols()
-)
+) %>% 
+  mutate(
+    sample_type = str_extract(sample_factor, '^[A-Z]{2}'),
+    sample_group = str_extract(sample_factor, '[05]$')
+  )
 
 salt_ma_prop_all %>% 
   mutate(sample_type = as.character(sample_type)) %>% 
@@ -190,31 +429,448 @@ salt_ma_prop_all %>%
     legend.text = element_text(size = 10, color = 'black')
   ) +
   coord_cartesian(
-    y = c(0, 0.7)
+    y = c(0, 1)
+  ) +
+  scale_x_discrete(
+    limits = c('CDS', 'utr5', 'utr3', 'intronic', 'intergenic')
   )
   
 ```
 
-# Salt MA - for expressed/salt gene sets
+
+# Mutation proportions - for gene sets
+
+## Salt MA
+
+Load in data:
 
 ```{r}
+# mutation properties
 salt_ma_gene_sets = read_tsv(
   here('data/rate/mut_describer/muts_described.final.gene_sets.tsv'),
-  col_types = cols()
-)
+  col_types = cols()) %>% 
+  mutate(
+    sample_group = str_extract(mutant_sample, '^[A-Z]{2}'),
+    sample_type = str_extract(mutant_sample, '[05]$'),
+    sample_factor = paste(sample_group, sample_type, sep = '_')
+  )
+  
+expressed_muts = list()
+perrineau_muts = list()
+
+expressed_muts$salt_ma = salt_ma_gene_sets %>% 
+  filter(expressed == 1)
+expressed_muts$adaptation = adaptation %>% 
+  filter(expressed == 1) %>% 
+  mutate(sample_factor = 'adaptation')
+expressed_muts$ma_orig = ma_original %>% 
+  filter(expressed == 1) %>% 
+  mutate(sample_factor = 'ma_original')
+
+perrineau_muts$salt_ma = salt_ma_gene_sets %>% 
+  filter(perrineau == 1)
+perrineau_muts$adaptation = adaptation %>% 
+  filter(perrineau == 1) %>% 
+  mutate(sample_factor = 'adaptation')
+perrineau_muts$ma_orig = ma_original %>% 
+  filter(perrineau == 1) %>% 
+  mutate(sample_factor = 'ma_original')
+
 ```
 
 
+Load in callables files:
+
+```{r}
+callables = list()
+
+callables$salt_ma_expressed = read_tsv(
+  here('data/rate/gene_lists/expressed_callables_summarised.tsv'),
+  col_types = cols()
+) %>% 
+  rename(callable_total = callables_total)
+callables$salt_ma_perrineau = read_tsv(
+  here('data/rate/gene_lists/perrineau_callables_summarised.tsv'),
+  col_types = cols()
+) %>% 
+  rename(callable_total = callables_total)
+
+callables$ma_orig_expressed = read_tsv(
+  here('data/rate/gene_lists/expressed_ma_callables_summarised.tsv'),
+  col_types = cols()
+) %>% 
+  mutate(sample_factor = 'ma_original') %>% 
+  rename(callable_total = callables_total)
+callables$ma_orig_perrineau = read_tsv(
+  here('data/rate/gene_lists/perrineau_ma_callables_summarised.tsv'),
+  col_types = cols()
+) %>% 
+  mutate(sample_factor = 'ma_original') %>% 
+  rename(callable_total = callables_total)
+
+callables$adaptation_expressed = read_csv(
+  here('data/prev/summary_callables_expressed.csv'),
+  col_types = cols()
+) %>% 
+  pivot_longer(
+    CDS:intronic, names_to = 'annotation', values_to = 'callables_total'
+  ) %>% 
+  group_by(annotation) %>% 
+  summarise(callable_total = sum(callables_total)) %>% 
+  mutate(sample_factor = 'adaptation')
+callables$adaptation_perrineau = read_csv(
+  here('data/prev/summary_salt_gene_callables.csv'),
+  col_types = cols()
+) %>% 
+  pivot_longer(
+    CDS:intronic, names_to = 'annotation', values_to = 'callables_total'
+  ) %>% 
+  group_by(annotation) %>% 
+  summarise(callable_total = sum(callables_total)) %>% 
+  mutate(sample_factor = 'adaptation')
+
+# all the callables need intergenic = 0 for compatibility with earlier fxns
+callables[c(1:4)] = map(callables[c(1:4)], 
+  ~ bind_rows(.,
+    data.frame(
+      sample_factor = unique(.$sample_factor),
+      annotation = 'intergenic',
+      callable_total = 0)
+  )
+)
+```
+
+Get proportions using fxns above:
+
+```{r}
+get_props_salt_ma = function(d, d_callables) {
+  d %>% 
+    group_by(sample_factor) %>% 
+    select(
+      sample_factor, sample_group, sample_type,
+      CDS, utr5, utr3, intronic, intergenic
+    ) %>% 
+    
+    # get n_muts per annotation per sample factor
+    summarise(
+      across(
+        where(is.numeric), sum)
+      ) %>% 
+    
+    pivot_longer(
+      cols = where(is.numeric),
+      names_to = 'annotation',
+      values_to = 'values'
+    ) %>% 
+    
+    # add callable counts
+    left_join(
+      d_callables %>% 
+        group_by(sample_factor, annotation) %>% 
+        summarise(
+          callable_total = sum(callable_total),
+          .groups = 'drop'
+        ),
+      by = c('sample_factor', 'annotation')
+    ) %>% 
+    group_by(sample_factor) %>% 
+    mutate(
+      numerator = (values / callable_total),
+      denominator = sum(numerator, na.rm = TRUE),
+      prop = numerator / denominator
+    )
+}
+  
+props_expressed = list()
+props_perrineau = list()
+
+# salt MA
+props_expressed$salt_ma = get_props_salt_ma(
+  expressed_muts$salt_ma, 
+  callables$salt_ma_expressed)
+
+props_perrineau$salt_ma = get_props_salt_ma(
+  perrineau_muts$salt_ma,
+  callables$salt_ma_perrineau
+)
+
+# adaptation
+props_expressed$adaptation = get_props(
+  expressed_muts$adaptation,
+  callables$adaptation_expressed,
+  salt_ma_bool = FALSE
+)
+
+props_perrineau$adaptation = get_props(
+  perrineau_muts$adaptation,
+  callables$adaptation_perrineau,
+  salt_ma_bool = FALSE
+)
+
+# MA original
+props_expressed$ma_orig = get_props(
+  expressed_muts$ma_orig,
+  callables$ma_orig_expressed,
+  salt_ma_bool = FALSE
+)
+
+props_perrineau$ma_orig = get_props(
+  perrineau_muts$ma_orig,
+  callables$ma_orig_perrineau,
+  salt_ma_bool = FALSE
+)
+
+# remove intergenic lines
+props_expressed = map(props_expressed, ~ filter(., annotation != 'intergenic'))
+props_perrineau = map(props_perrineau, ~ filter(., annotation != 'intergenic'))
+
+```
 
 
+## Bootstrap CIs
 
+```{r}
+annotations_gene_sets = list('CDS', 'utr5', 'utr3', 'intronic')
 
+expressed_cis = list()
+perrineau_cis = list()
 
+# expressed genes
+expressed_cis$salt_ma = annotations_gene_sets %>% 
+  map_dfr(
+    ~ prop_bootstrap(
+      expressed_muts$salt_ma, ., callables$salt_ma_expressed, 1000, salt_ma_bool = TRUE
+    )
+  ) 
 
+expressed_cis$adaptation = annotations_gene_sets %>% 
+  map_dfr(
+    ~ prop_bootstrap(
+      expressed_muts$adaptation, ., callables$adaptation_expressed, 1000, salt_ma_bool = FALSE
+    )
+  )
 
+expressed_cis$ma_orig = annotations_gene_sets %>% 
+  map_dfr(
+    ~ prop_bootstrap(
+      expressed_muts$ma_orig, ., callables$ma_orig_expressed, 1000, salt_ma_bool = FALSE
+    )
+  )
 
+# perrineau
+perrineau_cis$salt_ma = annotations_gene_sets %>% 
+  map_dfr(
+    ~ prop_bootstrap(
+      perrineau_muts$salt_ma, ., callables$salt_ma_perrineau, 1000, salt_ma_bool = TRUE
+    )
+  )
 
+perrineau_cis$adaptation = annotations_gene_sets %>% 
+  map_dfr(
+    ~ prop_bootstrap(
+      perrineau_muts$adaptation, ., callables$adaptation_perrineau, 1000, salt_ma_bool = FALSE
+    )
+  )
 
+perrineau_cis$ma_orig = annotations_gene_sets %>% 
+  map_dfr(
+    ~ prop_bootstrap(
+      perrineau_muts$ma_orig, ., callables$ma_orig_perrineau, 1000, salt_ma_bool = FALSE
+    )
+  )
+
+```
+
+Join with originals:
+
+```{r}
+expressed_final = list()
+perrineau_final = list()
+
+data_groups = c('salt_ma', 'adaptation', 'ma_orig')
+
+expressed_final = map(
+  data_groups, 
+  ~ left_join(
+    props_expressed[[.]],
+    expressed_cis[[.]] %>% 
+      rename(annotation = ant),
+    by = c('sample_factor', 'annotation')
+  )
+) %>% 
+  setNames(., data_groups)
+
+perrineau_final = map(
+  data_groups,
+  ~ left_join(
+    props_perrineau[[.]],
+    perrineau_cis[[.]] %>% 
+      rename(annotation = ant),
+    by = c('sample_factor', 'annotation')
+  )
+) %>% 
+  setNames(., data_groups)
+
+# write to file
+# write_tsv(expressed_final$salt_ma, here('data/spatial/salt_ma_expressed_cis.tsv'))
+# write_tsv(expressed_final$adaptation, here('data/spatial/adaptation_expressed_cis.tsv'))
+# write_tsv(expressed_final$ma_orig, here('data/spatial/ma_orig_expressed_cis.tsv'))
+
+# write_tsv(perrineau_final$salt_ma, here('data/spatial/salt_ma_perrineau_cis.tsv'))
+# write_tsv(perrineau_final$adaptation, here('data/spatial/adaptation_perrineau_cis.tsv'))
+# write_tsv(perrineau_final$ma_orig, here('data/spatial/ma_orig_perrineau_cis.tsv'))
+```
+
+# Final Plots
+
+Loading in data:
+
+```{r}
+load_final = function(dataset) {
+  d = map_dfr(
+    dir_ls(here('data/spatial'), regexp = paste0('spatial/', dataset, '\\w+')),
+    read_tsv, col_types = cols(),
+    .id = 'gene_set'
+  ) %>% 
+  rowwise() %>% 
+  mutate(
+    gene_set = str_match(gene_set, '(\\w+_\\w+)_cis\\.tsv')[2]
+  ) %>% 
+  mutate(gene_set = case_when(
+    str_detect(gene_set, 'annotation') ~ 'genome wide',
+    str_detect(gene_set, 'expressed') ~ 'expressed genes',
+    str_detect(gene_set, 'perrineau') ~ 'salt genes'
+    )
+  )
+}
+
+ma_orig_final = load_final('ma')
+adaptation_final = load_final('adaptation')
+salt_ma_final = load_final('salt_ma') %>% 
+  filter(!is.na(prop)) # the odd indel grouping
+
+```
+
+Recreating Fig 2:
+
+```{r}
+ma_orig_final %>% 
+  bind_rows(adaptation_final) %>% 
+  mutate(
+    gene_set = factor(
+      gene_set, levels = c('genome wide', 'expressed genes', 'salt genes')),
+    sample_factor = factor(
+      sample_factor, levels = c('ma_original', 'adaptation')),
+    annotation = factor(
+      annotation, levels = c('CDS', 'utr5', 'utr3', 'intronic', 'intergenic')),
+    sample_factor = case_when(
+      sample_factor == 'ma_original' ~ 'MA',
+      sample_factor == 'adaptation' ~ 'salt-selection'
+    )
+  ) %>% 
+  ggplot(
+    aes(x = annotation, y = prop, fill = sample_factor)) +
+  geom_bar(
+    stat = 'identity', 
+    position = position_dodge(width = 0.9),
+    colour = 'black',
+    size = 0.4) +
+  geom_errorbar(
+    aes(ymin = lower_ci, ymax = upper_ci),
+    position = position_dodge(width = 0.9),
+    size = 0.4, width = 0.2
+  ) +
+  facet_grid(
+    ~ gene_set, scales = 'free') +
+  coord_cartesian(
+    y = c(0, 0.75)
+  ) +
+  labs(
+    x = '',
+    y = 'Proportion of all mutations'
+  ) +
+  scale_fill_manual(
+    values = c('MA' = '#87C5FC', 'salt-selection' = '#FF5B5F')
+  ) +
+  # macro elements
+  guides(fill = guide_legend(
+    override.aes = list(color = 'white'))
+  ) +
+  theme(
+    panel.border = element_rect(colour = 'black', size = 0.5, fill = NA),
+    panel.background = element_blank(),
+    strip.background = element_blank(),
+    legend.position = c(0.175, 0.85),
+    legend.text = element_text(size = 8, colour = 'black'),
+    legend.title = element_blank(),
+    legend.key = element_rect(color = 'white'),
+    legend.key.size = unit(0.5, 'cm')) +
+  # text elements
+  theme(
+    strip.text = element_text(family = 'Helvetica', colour = 'black', size = 10),
+    axis.title = element_text(family = 'Helvetica', colour = 'black', size = 10),
+    axis.text = element_text(family = 'Helvetica', colour = 'black', size = 10),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+```
+
+Salt MA data:
+
+```{r}
+salt_ma_final %>% 
+  mutate(
+    gene_set = factor(
+      gene_set, levels = c('genome wide', 'expressed genes', 'salt genes')),
+    annotation = factor(
+      annotation, levels = c('CDS', 'utr5', 'utr3', 'intronic', 'intergenic')),
+    sample_factor = str_replace(sample_factor, '_', ' '),
+    sample_group = str_extract(sample_factor, '^[A-Z]{2}'),
+    sample_type = str_extract(sample_factor, '[05]$')
+  ) %>% 
+  ggplot(
+    aes(x = annotation, y = prop, fill = sample_type)) +
+  geom_bar(
+    stat = 'identity', 
+    position = position_dodge(width = 0.9),
+    colour = 'black',
+    size = 0.4) +
+  geom_errorbar(
+    aes(ymin = lower_ci, ymax = upper_ci),
+    position = position_dodge(width = 0.9),
+    size = 0.4, width = 0.2
+  ) +
+  facet_grid(
+    rows = vars(sample_group), cols = vars(gene_set), scales = 'free') +
+  coord_cartesian(
+    y = c(0, 1.1)
+  ) +
+  labs(
+    x = '',
+    y = 'Proportion of all mutations'
+  ) +
+  scale_fill_manual(
+    values = c('0' = '#87C5FC', '5' = '#FF5B5F')
+  ) +
+  # macro elements
+  guides(fill = guide_legend(
+    override.aes = list(color = 'white'))
+  ) +
+  theme(
+    panel.border = element_rect(colour = 'black', size = 0.5, fill = NA),
+    panel.background = element_blank(),
+    strip.background = element_blank(),
+    legend.text = element_text(size = 8, colour = 'black'),
+    legend.title = element_blank(),
+    legend.key = element_rect(color = 'white'),
+    legend.key.size = unit(0.5, 'cm')) +
+  # text elements
+  theme(
+    strip.text = element_text(family = 'Helvetica', colour = 'black', size = 10),
+    axis.title = element_text(family = 'Helvetica', colour = 'black', size = 10),
+    axis.text = element_text(family = 'Helvetica', colour = 'black', size = 10),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+```
 
 
 
