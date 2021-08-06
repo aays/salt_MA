@@ -20,7 +20,8 @@ library(wesanderson)
 salt <- read_tsv(
   here('data/mutations/mut_describer/muts_described.final.tsv'), col_types = cols()) %>% 
   mutate(sample_type = str_extract(mutant_sample, '[05]$'),
-         sample_group = str_extract(mutant_sample, '^[A-Z]{2}'))
+         sample_group = str_extract(mutant_sample, '^[A-Z]{2}')) %>% 
+  mutate(sample_factor = paste(sample_group, sample_type, sep = '_'))
 
 ma <- read_tsv(
   here('data/spectrum_context/MA/final.curated_muts.coord_sorted.txt'), 
@@ -153,7 +154,7 @@ count_table
 
 ```
 
-## Calculated expected mutation counts
+## Calculate expected mutation counts
 
 Expected mutation rates:
 
@@ -294,7 +295,130 @@ ggplot(
 
 ```
 
+## Equilibrium GC content
 
+$$ \frac{n_{AT -> GC}}{n_{GC -> AT} + n_{AT -> GC}} $$
+
+where $n_{AT -> GC}$ is a 'W->S' mutation, and the reverse is a 'S->W' mutation 
+(Mugal, Weber, Ellegren 2015)
+
+TODO: normalize relative to the total number of AT and GC sites in the genome! 
+
+TODO: check orig script for stats on this - 2-tailed test
+
+```{r}
+get_eq_gc = function(d) {
+  num_AT = 0.335 * 75417640 # these are the only numbers that make it fucking work
+  num_GC = 0.665 * 75417640 # check against the silent site value for the adaptation dataset
+  # num_AT = 0.365 * 6410499419
+  # num_AT = d %>% filter(substr(mutation, 1, 1) %in% c('A', 'T')) %>% nrow()
+  # num_GC = d %>% filter(substr(mutation, 1, 1) %in% c('G', 'C')) %>% nrow()
+  ws_mutations = c('A>G', 'A>C', 'T>G', 'T>C')
+  sw_mutations = c('G>A', 'G>T', 'C>A', 'C>T')
+  
+  n_ws = d %>% 
+    filter(mutation %in% ws_mutations) %>% 
+    nrow()
+  
+  n_sw = d %>% 
+    filter(mutation %in% sw_mutations) %>% 
+    nrow()
+  
+  n_ws_norm = n_ws / num_AT
+  n_sw_norm = n_sw / num_GC
+  
+  eq_gc = n_ws_norm / (n_ws_norm + n_sw_norm)
+  message(paste(n_ws, n_sw))
+  message(paste(n_ws / num_AT, n_sw / num_GC))
+  return(eq_gc)
+}
+```
+
+Calculate values:
+
+```{r}
+get_eq_gc(ma)
+```
+
+(769 * x) / [(769 * x) + (3579 * 1-x) = 0.29
+
+x = n_AT
+
+
+# Ts/Tv
+
+```{r}
+ts_tv = function(d, values = FALSE) {
+  tv = c('A>T', 'T>A', 'G>C', 'C>G', 'A>C', 'C>A', 'G>T', 'T>G')
+  ts = c('A>G', 'G>A', 'C>T', 'T>C')
+  ts_count = d %>% 
+    filter(mutation %in% ts) %>% 
+    nrow()
+  tv_count = d %>% 
+    filter(mutation %in% tv) %>% 
+    nrow()
+  ts_tv_ratio = ts_count / tv_count
+  if (!values) {
+    return(ts_tv_ratio)
+  } else if (values) {
+    return(c('ts' = ts_count, 'tv' = tv_count))
+  }
+}
+```
+
+Running over datasets:
+
+```{r}
+message('ma')
+ts_tv(ma)
+
+message('adaptation')
+ts_tv(adaptation_silent_nonsilent)
+ts_tv(adaptation_silent_nonsilent %>% filter(site_type == 'silent'))
+ts_tv(adaptation_silent_nonsilent %>% filter(site_type == 'nonsilent'))
+
+message('salt_ma')
+map(
+  salt %>% 
+    split(.$sample_factor),
+  ~ ts_tv(.),
+  .id = 'sample_factor'
+)
+```
+
+Binomial tests - classifying Ts as 'success', meaning prob(success) is 1/3 -
+
+```{r}
+# original MA
+ma_vals = ts_tv(ma, values = TRUE)
+binom.test(ma_vals['ts'], sum(ma_vals), alternative = 'two.sided', conf.level = 0.95) 
+
+d_list = list(
+  'ma' = ma, 
+  'adaptation' = adaptation_silent_nonsilent,
+  'adaptation_silent' = adaptation_silent_nonsilent %>% filter(site_type == 'silent'),
+  'adaptation_nonsilent' = adaptation_silent_nonsilent %>% filter(site_type == 'nonsilent'))
+
+salt_list = salt %>% split(.$sample_factor)
+
+d_list = append(d_list, salt_list)
+
+map_dfr(
+  d_list,
+  function(d) {
+    vals = ts_tv(d, values = TRUE)
+    out = binom.test(
+      vals['ts'], sum(vals), p = 1/3,
+      alternative = 'two.sided',
+      conf.level = 0.95
+    ) %>% 
+      broom::tidy()
+  },
+  .id = 'sample_factor'
+)
+
+
+```
 
 
 
