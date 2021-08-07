@@ -1,7 +1,7 @@
 ---
 title: "Mutation base spectrum"
 author: Ahmed Hasan
-output: html_notebook
+output: pdf_document
 ---
 
 # Package import
@@ -18,7 +18,7 @@ library(wesanderson)
 ```{r}
 # all mut describer outputs
 salt <- read_tsv(
-  here('data/mutations/mut_describer/muts_described.final.tsv'), col_types = cols()) %>% 
+  here('data/rate/mut_describer/muts_described.final.gene_sets.tsv'), col_types = cols()) %>% 
   mutate(sample_type = str_extract(mutant_sample, '[05]$'),
          sample_group = str_extract(mutant_sample, '^[A-Z]{2}')) %>% 
   mutate(sample_factor = paste(sample_group, sample_type, sep = '_'))
@@ -295,24 +295,30 @@ ggplot(
 
 ```
 
-## Equilibrium GC content
+# Equilibrium GC content
 
 $$ \frac{n_{AT -> GC}}{n_{GC -> AT} + n_{AT -> GC}} $$
 
 where $n_{AT -> GC}$ is a 'W->S' mutation, and the reverse is a 'S->W' mutation 
 (Mugal, Weber, Ellegren 2015)
 
-TODO: normalize relative to the total number of AT and GC sites in the genome! 
-
-TODO: check orig script for stats on this - 2-tailed test
-
 ```{r}
-get_eq_gc = function(d) {
-  num_AT = 0.335 * 75417640 # these are the only numbers that make it fucking work
-  num_GC = 0.665 * 75417640 # check against the silent site value for the adaptation dataset
-  # num_AT = 0.365 * 6410499419
-  # num_AT = d %>% filter(substr(mutation, 1, 1) %in% c('A', 'T')) %>% nrow()
-  # num_GC = d %>% filter(substr(mutation, 1, 1) %in% c('G', 'C')) %>% nrow()
+# GC 68891655 
+# AT 38724292
+# total 107615947
+
+# GC 37413853 
+# AT 20922472
+# total 58336325
+
+get_eq_gc = function(d, silent = FALSE, values = FALSE) {
+  if (!silent) {
+    num_GC = 68891655
+    num_AT = 38724292
+  } else if (silent) {
+    num_GC = 37413853
+    num_AT = 20922472
+  }
   ws_mutations = c('A>G', 'A>C', 'T>G', 'T>C')
   sw_mutations = c('G>A', 'G>T', 'C>A', 'C>T')
   
@@ -327,10 +333,18 @@ get_eq_gc = function(d) {
   n_ws_norm = n_ws / num_AT
   n_sw_norm = n_sw / num_GC
   
-  eq_gc = n_ws_norm / (n_ws_norm + n_sw_norm)
-  message(paste(n_ws, n_sw))
-  message(paste(n_ws / num_AT, n_sw / num_GC))
-  return(eq_gc)
+  if (values) {
+    return(c(
+      'n_ws' = n_ws,
+      'n_sw' = n_sw,
+      'num_AT' = num_AT,
+      'num_GC' = num_GC))
+  } else if (!values) {
+    eq_gc = n_ws_norm / (n_ws_norm + n_sw_norm)
+    message(paste(n_ws, n_sw))
+    message(paste(n_ws / num_AT, n_sw / num_GC))
+    return(eq_gc)
+  }
 }
 ```
 
@@ -338,11 +352,53 @@ Calculate values:
 
 ```{r}
 get_eq_gc(ma)
+
+get_eq_gc(adaptation_silent_nonsilent %>% filter(site_type == 'silent'), silent = TRUE)
+
+map(
+  salt %>% split(.$sample_factor),
+  ~ get_eq_gc(.)
+)
 ```
 
-(769 * x) / [(769 * x) + (3579 * 1-x) = 0.29
 
-x = n_AT
+
+## WS and SW mutation counts
+
+```{r}
+# MA orig - mutations to ATs vs mutations to GCs
+ma_orig_values = get_eq_gc(ma, values = TRUE)
+message('ma')
+as.numeric(ma_orig_values['n_sw'] / ma_orig_values['n_ws']) # 4.65
+
+# adaptation - silent and nonsilent
+adaptation_silent_values = get_eq_gc(
+  adaptation_silent_nonsilent %>% 
+    filter(site_type == 'silent'), 
+  values = TRUE)
+adaptation_nonsilent_values = get_eq_gc(
+  adaptation_silent_nonsilent %>% 
+    filter(site_type == 'nonsilent'), 
+  values = TRUE)
+
+message('adaptation silent')
+as.numeric(adaptation_silent_values['n_sw'] / adaptation_silent_values['n_ws']) # silent - 3.65
+message('adaptation nonsilent')
+as.numeric(adaptation_nonsilent_values['n_sw'] / adaptation_silent_values['n_ws']) # nonsilent - 3.75
+
+# salt ma - across all factors
+map(
+  salt %>% split(.$sample_factor),
+  function(d) {
+    vals = get_eq_gc(d, values = TRUE)
+    mut_ratio = vals['n_sw'] / vals['n_ws']
+    return(as.numeric(mut_ratio))
+  }
+)
+
+
+```
+
 
 
 # Ts/Tv
@@ -381,8 +437,7 @@ message('salt_ma')
 map(
   salt %>% 
     split(.$sample_factor),
-  ~ ts_tv(.),
-  .id = 'sample_factor'
+  ~ ts_tv(.)
 )
 ```
 
