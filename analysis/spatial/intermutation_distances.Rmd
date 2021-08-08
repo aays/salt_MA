@@ -38,8 +38,29 @@ muts_clean = muts_raw %>%
 ma_original = read_tsv(
   here('data/spectrum_context/MA/final.curated_muts.coord_sorted.txt'),
   col_types = cols(), na = c('.')) %>% 
-  select(-chromosome_1, -position_1) %>% 
-  filter(nchar(mutation) == 3) # remove indels
+  select(-chromosome_1, -position_1)
+  # filter(nchar(mutation) == 3) # remove indels
+
+# for adaptation dataset - see mut_base_spectrum.Rmd
+splice_sites = data.frame(
+  chromosome = c('chromosome_12', 'chromosome_5', 'chromosome_6', 'chromosome_8'),
+  position = c(8771346, 2315498, 2122297, 1131421)
+)
+
+adaptation = read_csv(
+  here('data/prev/all_mutations_w_shared_hmmIBD_corrected_FPKM.csv'),
+  # here('data/prev/all_mutations.csv'),
+  col_types = cols(), na = c('.')
+) %>% 
+  # filter(type == 'SNP') %>% 
+  # adding a silent/nonsilent column to the adaptation data frame
+  mutate(site_type = case_when(
+    Nonsyn_V_Syn == 'synonymous' | intronic == 1 | intergenic == 1 ~ 'silent',
+    TRUE ~ 'nonsilent'
+  )) %>% 
+  mutate(site_type = ifelse(
+    chromosome %in% splice_sites$chromosome & position %in% splice_sites$position, 'nonsilent', site_type
+  )) # 119 each
 ```
 
 # Distances
@@ -112,13 +133,13 @@ muts_line_group %>%
   ggplot(aes(x = log10(d))) +
   stat_ecdf(aes(color = sample_group, linetype = line)) +
   theme_classic() +
-  scale_colour_viridis_d(begin = 0.4, end = 0.6)
+  scale_colour_viridis_d(begin = 0.4, end = 0.6) +
   stat_ecdf(aes(color = sample_group, linetype = line))
 ```
 
 ## KS tests
 
-Between 0 and 5 of the same group:
+### Between 0 and 5 of the same group
 
 ```{r}
 ks.test(
@@ -132,7 +153,7 @@ ks.test(
 )
 ```
 
-Between sample groups:
+### Between sample groups
 
 ```{r}
 ks.test(
@@ -146,7 +167,7 @@ ks.test(
 )
 ```
 
-Between salt MA and original MA:
+### Between salt MA and original MA
 
 ```{r}
 # prepping original MA dataset
@@ -158,10 +179,11 @@ ma_orig_distances = ma_original %>%
   
   # get intermut distances
   mutate(next_pos = lead(position)) %>% 
+  # mutate(next_pos = ifelse(is.na(next_pos), lag(position), next_pos)) %>% 
   mutate(d = next_pos - position) %>% 
   
   # remove 'outer boundary' muts
-  filter(!is.na(d)) %>% 
+  # filter(!is.na(d)) %>% 
   ungroup()
 
 # plot
@@ -197,6 +219,62 @@ ks.test(
   ma_orig_distances %>% select(d) %>% unlist()
 )
 ```
+
+## Adaptation dataset
+
+```{r}
+# prepping original MA dataset
+adaptation_distances = adaptation %>% 
+  split(.$site_type) %>% 
+  map(
+    ~ select(., chromosome, position, mutant_sample, site_type) %>% 
+    mutate(chrom_val = as.numeric(str_extract(chromosome, '[0-9]{1,2}$'))) %>% 
+    arrange(chrom_val, position) %>% 
+    group_by(chromosome) %>% 
+    
+    # get intermut distances
+    mutate(next_pos = lead(position)) %>% 
+    mutate(d = next_pos - position) %>% 
+    
+    # remove 'outer boundary' muts
+    filter(!is.na(d)) %>% 
+    ungroup()
+  )
+
+adaptation_silent = adaptation_distances$silent
+adaptation_nonsilent = adaptation_distances$nonsilent
+```
+
+Recreating the original Fig 4:
+
+```{r}
+ma_orig_distances %>% 
+  mutate(site_type = 'ma') %>% 
+  bind_rows(adaptation_silent, adaptation_nonsilent) %>% 
+
+ggplot(aes(x = log10(d), color = site_type)) +
+  stat_ecdf(size = 1.2, geom = 'line') +
+  theme_classic() +
+  scale_colour_viridis_d(begin = 0.4, end = 0.8)
+```
+
+```{r}
+# between MA and silent HS sites
+ks.test(
+  ma_orig_distances$d, adaptation_silent$d
+)
+
+# between silent and nonsilent HS sites
+ks.test(
+  adaptation_silent$d, adaptation_nonsilent$d
+)
+```
+
+
+
+
+
+
 
 
 
