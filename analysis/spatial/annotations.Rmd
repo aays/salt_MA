@@ -721,6 +721,111 @@ perrineau_final = map(
 # write_tsv(perrineau_final$ma_orig, here('data/spatial/ma_orig_perrineau_cis.tsv'))
 ```
 
+## Overall gene set stats
+
+Of the X genic mutations in [data set], Y were in expressed genes - for all salt MA factors (table?)
+
+```{r}
+report_props = function(d) {
+  total_count = d %>% 
+    filter(genic == 1) %>% 
+    nrow()
+  expressed_count = d %>% 
+    filter(expressed == 1) %>% 
+    nrow()
+  perrineau_count = d %>% 
+    filter(perrineau == 1) %>% 
+    nrow()
+  
+  return(c(
+    'total' = total_count,
+    'expressed' = expressed_count,
+    'perrineau' = perrineau_count)
+    )
+}
+
+gene_set_counts = list()
+gene_set_counts$ma_orig = report_props(ma_original)
+gene_set_counts$adaptation = report_props(adaptation)
+gene_set_counts$adaptation_silent = report_props(adaptation %>% filter(site_type == 'silent'))
+gene_set_counts$adaptation_nonsilent = report_props(adaptation %>% filter(site_type == 'nonsilent'))
+
+gene_set_counts = append(
+  gene_set_counts,
+  map(
+    salt_ma_gene_sets %>% split(.$sample_factor),
+    ~ report_props(.),
+    .id = 'sample_factor'
+  )
+)
+```
+
+expressed n_expressed_d1 n_expressed_d2
+
+total n_total_d1 n_total_d2
+
+matrix goes cols first
+
+Chi-square tests to see if proportions of muts in [expressed/salt/etc] are similar to MA proportions
+
+```{r}
+do_chisq = function(vec1, vec2) {
+  chisq.test(
+    matrix(
+      c(vec1, vec2),
+      nrow = 2, ncol = 2)
+  )
+}
+
+# expressed genes - MA vs HS
+message('expressed genes, MA vs HS')
+do_chisq(
+  gene_set_counts$adaptation[c('expressed', 'total')], 
+  gene_set_counts$ma_orig[c('expressed', 'total')])
+
+# HS - silent vs nonsilent in expressed genes
+message('HS expressed, silent vs nonsilent')
+do_chisq(
+  gene_set_counts$adaptation_silent[c('expressed', 'total')],
+  gene_set_counts$adaptation_nonsilent[c('expressed', 'total')]
+)
+
+# Perrineau genes - MA vs HS
+message('salt genes, MA vs HS')
+do_chisq(
+  gene_set_counts$adaptation[c('perrineau', 'total')],
+  gene_set_counts$ma_orig[c('perrineau', 'total')]
+)
+
+# HS - silent vs nonsilent in salt genes
+message('HS salt, silent vs nonsilent')
+do_chisq(
+  gene_set_counts$adaptation_silent[c('perrineau', 'total')],
+  gene_set_counts$adaptation_nonsilent[c('perrineau', 'total')]
+)
+
+```
+
+Between the Salt MA lines:
+
+```{r}
+for (sample_type in list('CC', 'DL', 'SL')) {
+  message(paste(sample_type, '0 vs 5'))
+  sample_0 = gene_set_counts[[paste(sample_type, '0', sep = '_')]]
+  sample_5 = gene_set_counts[[paste(sample_type, '5', sep = '_')]]
+  message(paste(sample_type, 'expressed genes'))
+  print(do_chisq(
+    sample_0[c('expressed', 'total')], sample_5[c('expressed', 'total')]
+  ))
+  message(paste(sample_type, 'salt genes'))
+  print(do_chisq(
+    sample_0[c('perrineau', 'total')], sample_5[c('perrineau', 'total')]
+  ))
+}
+```
+
+
+
 # Final Plots
 
 Loading in data:
@@ -871,6 +976,27 @@ salt_ma_final %>%
     axis.text.x = element_text(angle = 45, hjust = 1)
   )
 ```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
