@@ -154,6 +154,27 @@ count_table
 
 ```
 
+Summary stats:
+
+```{r}
+# most and least common mutations
+count_table %>% 
+  
+  # get most and least mutations
+  group_by(name) %>% 
+  filter(count == max(count) | count == min(count)) %>% 
+  mutate(mut_type = case_when(
+    count == min(count) ~ 'least mutated',
+    count == max(count) ~ 'most mutated')
+    ) %>% 
+  
+  # get fold difference 
+  mutate(fold_diff = max(count) / min(count))
+
+
+```
+
+
 ## Calculate expected mutation counts
 
 Expected mutation rates:
