@@ -10,6 +10,8 @@ output: pdf_notebook
 library(tidyverse)
 library(fs)
 library(here)
+library(wesanderson)
+library(patchwork)
 ```
 
 # Load in and clean data
@@ -98,7 +100,8 @@ muts_line = muts_clean %>%
   mutate(d = next_pos - position) %>% 
   
   # remove 'outer boundary' muts
-  filter(!is.na(d))
+  filter(!is.na(d)) %>% 
+  ungroup()
 
 muts_line
 ```
@@ -125,6 +128,17 @@ muts_line_group
 
 ## Plots
 
+Across lines - 
+
+```{r}
+muts_line %>% 
+  ggplot(aes(x = log10(d))) +
+  stat_ecdf(aes(color = line)) +
+  theme_classic() +
+  scale_colour_viridis_d(begin = 0.4, end = 0.6)
+```
+
+
 Across groups and lines:
 
 ```{r}
@@ -133,11 +147,20 @@ muts_line_group %>%
   ggplot(aes(x = log10(d))) +
   stat_ecdf(aes(color = sample_group, linetype = line)) +
   theme_classic() +
-  scale_colour_viridis_d(begin = 0.4, end = 0.6) +
-  stat_ecdf(aes(color = sample_group, linetype = line))
+  scale_colour_viridis_d(begin = 0.4, end = 0.6)
 ```
 
 ## KS tests
+
+### Between 0 and 5
+
+```{r}
+ks.test(
+  muts_line %>% filter(line == 0) %>% select(d) %>% unlist(),
+  muts_line %>% filter(line == 5) %>% select(d) %>% unlist()
+)
+```
+
 
 ### Between 0 and 5 of the same group
 
@@ -175,6 +198,7 @@ ma_orig_distances = ma_original %>%
   select(chromosome, position, mutant_sample) %>% 
   mutate(chrom_val = as.numeric(str_extract(chromosome, '[0-9]{1,2}$'))) %>% 
   arrange(chrom_val, position) %>% 
+  distinct() %>% 
   group_by(chromosome) %>% 
   
   # get intermut distances
@@ -187,10 +211,9 @@ ma_orig_distances = ma_original %>%
   ungroup()
 
 # plot
-muts_line_group %>% 
-  filter(sample_group != 'SL') %>%
+muts_line %>% 
   ggplot(aes(x = log10(d))) +
-  stat_ecdf(aes(color = sample_group, linetype = line)) +
+  stat_ecdf(aes(color = line)) +
   stat_ecdf(data = ma_orig_distances) +
   theme_classic() +
   scale_colour_viridis_d(begin = 0.4, end = 0.8)
@@ -199,6 +222,16 @@ muts_line_group %>%
 KS tests:
 
 ```{r}
+ks.test(
+  muts_line %>% filter(line == 0) %>% select(d) %>% unlist(),
+  ma_orig_distances %>% select(d) %>% unlist()
+)
+
+ks.test(
+  muts_line %>% filter(line == 5) %>% select(d) %>% unlist(),
+  ma_orig_distances %>% select(d) %>% unlist()
+)
+
 ks.test(
   muts_line_group %>% filter(sample_group == 'CC', line == 0) %>% select(d) %>% unlist(),
   ma_orig_distances %>% select(d) %>% unlist()
@@ -268,10 +301,166 @@ ks.test(
 ks.test(
   adaptation_silent$d, adaptation_nonsilent$d
 )
+
+# TODO: between saltMA and adaptation/original MA
 ```
 
+# Final combined plot
 
+```{r}
+final_distances = muts_line %>% 
+  rename(site_type = line) %>% 
+  select(
+    chromosome, position, mutant_sample,
+    chrom_val, next_pos, d, site_type
+  ) %>% 
+  bind_rows(
+    ma_orig_distances %>% mutate(site_type = 'ma'),
+    adaptation_silent, 
+    adaptation_nonsilent
+) %>% 
+   mutate(
+    site_type = case_when(
+      site_type == 'nonsilent' ~ 'HS lines (non-silent sites)',
+      site_type == 'silent' ~ 'HS lines (silent sites)',
+      site_type == 'ma' ~ 'MA',
+      site_type == '0' ~ 'Salt MA (control)',
+      site_type == '5' ~ 'Salt MA (salt)'
+    )) %>% 
+  mutate(
+    site_type = fct_relevel(site_type, 
+      c('MA', 'HS lines (non-silent sites)', 'HS lines (silent sites)', 
+        'Salt MA (control)', 'Salt MA (salt)'))
+  )
+  
 
+distance_cdf_plot = final_distances %>% 
+  ggplot(
+    aes(x = log10(d), color = site_type)) +
+  stat_ecdf(
+    size = 1, 
+    geom = 'line') +
+  scale_color_manual(
+    values = wes_palette(
+      7, name = 'Darjeeling1', type = 'continuous')[3:7]) +
+  labs(
+    x = '',
+    y = 'Cumulative density'
+  ) +
+  # legend styling
+  theme(
+    legend.text = element_text(family = 'Helvetica', color = 'black', size = 10),
+    legend.position = c(0.2, 0.8),
+    legend.title = element_blank(),
+    legend.box.background = element_blank(),
+    legend.key = element_blank()
+  ) +
+  theme(
+    panel.background = element_blank(),
+    axis.line = element_line(size = 0.5, color = 'black'),
+    axis.ticks = element_line(size = 0.5, color = 'black'),
+    axis.title = element_text(family = 'Helvetica', size = 12, color = 'black'),
+    axis.text = element_text(family = 'Helvetica', size = 12, color = 'black')
+  )
+
+distance_cdf_plot
+```
+
+Creating the density plot:
+
+```{r}
+final_distances_density = final_distances %>% 
+  mutate(
+    log_d = log10(d),
+    bin = floor(log_d / 0.5) * 0.5) %>% 
+  # get density vals
+  group_by(
+    site_type, bin
+  ) %>% 
+  summarise(
+    n = n()
+  ) %>% 
+  filter( # remove end of chr mutations
+    !is.na(bin), 
+    is.finite(bin)) %>% 
+  mutate(
+    total_group = sum(n)) %>% 
+  ungroup() %>% 
+  mutate(
+    density = n / total_group) 
+
+# add missing values
+final_distances_missing = final_distances_density %>% 
+  split(.$site_type) %>% 
+  map_dfr(
+    function(d) {
+      bin_range = seq(0, 6.5, 0.5)
+      current_vals = unique(d$bin)
+      missing_vals = bin_range[
+        sapply(bin_range, function(val) !val %in% current_vals)
+      ]
+      if (length(missing_vals) > 0) {
+        vals_to_add = data.frame(
+          bin = missing_vals
+        )
+        vals_to_add$site_type = unique(d$site_type)
+        vals_to_add$bin = missing_vals
+        vals_to_add$n = 0
+        vals_to_add$total_group = unique(d$total_group)
+        vals_to_add$density = 0
+        vals_to_add = select(vals_to_add, site_type, bin, everything())
+        return(vals_to_add)
+      }
+    }
+  )
+
+final_distances_density = bind_rows(
+  final_distances_density,
+  final_distances_missing
+) %>% 
+  arrange(site_type, bin)
+```
+  
+Density barplot:
+
+```{r}
+distance_density_plot = final_distances_density %>% 
+  ggplot(
+    aes(x = bin, y = density, fill = site_type)
+  ) +
+  geom_bar(
+    stat = 'identity', 
+    position = position_dodge(),
+    color = 'black'
+  ) +
+  guides(fill = FALSE) +
+  scale_fill_manual(
+    values = wes_palette(
+      7, name = 'Darjeeling1', type = 'continuous')[3:7]) +
+  labs(
+    x = expression(
+      paste('Intermutation distance (', log[10], ' bp)')),
+    y = 'Proportion'
+  ) +
+  # legend styling
+  theme(
+    panel.background = element_blank(),
+    axis.line = element_line(size = 0.5, color = 'black'),
+    axis.ticks = element_line(size = 0.5, color = 'black'),
+    axis.title = element_text(family = 'Helvetica', size = 12, color = 'black'),
+    axis.text = element_text(family = 'Helvetica', size = 12, color = 'black')
+  )
+
+distance_density_plot
+  
+```
+
+Combining the two:
+
+```{r}
+distance_cdf_plot + distance_density_plot +
+  plot_layout(nrow = 2, ncol = 1)
+```
 
 
 
