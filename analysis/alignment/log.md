@@ -2128,6 +2128,105 @@ time bash gvcf_temp.sh SL29 0
 time bash gvcf_temp.sh SL29 5
 ```
 
+## 19/7/2021
+
+bit of an experiment - what happens if SL is redone with different MarkDuplicates
+parameters? given that we ended up removing 'SNPs' caused by duplicates manually anyways
+
+```bash
+mkdir data/alignments/bam_temp
+ln -sv /opt/anaconda3/pkgs/picard-2.25.0-0/share/picard-2.25.0-0/picard.jar bin/
+
+# test run
+time java -jar /bin/picard.jar MarkDuplicates \
+    I=data/alignments/bam/SL27_0.bam \
+    O=data/alignments/bam_temp/SL27_0.dup.bam \
+    METRICS_FILE=analysis/dup_metrics.txt
+    REMOVE_DUPLICATES=true # done in 5 min
+
+time for fname in SL27_5 SL29_0 SL29_5; do
+    time java -jar /bin/picard.jar MarkDuplicates \
+        I=data/alignments/bam/${fname}.bam \
+        O=data/alignments/bam_temp/${fname}.dup.bam \
+        METRICS_FILE=analysis/dup_metrics.txt
+        REMOVE_DUPLICATES=true
+    sleep 3;
+done 
+
+# create indices - in data/alignment/bam_temp
+for fname in *.bam; do time samtools index ${fname}; done
+```
+
+next up - calling variants:
+
+```bash
+time /usr/bin/java -jar ./bin/GenomeAnalysisTK.jar \
+-T UnifiedGenotyper \
+-R data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+-I data/alignments/bam_temp/SL27_0.dup.bam \
+-I data/alignments/bam_temp/SL27_5.dup.bam \
+-glm BOTH \
+-ploidy 2 \
+--output_mode EMIT_ALL_SITES \
+--heterozygosity 0.02 \
+--indel_heterozygosity 0.002 \
+-o data/alignments/bam_temp/SL27_dup_UG.vcf # done in 102 min
+
+time /usr/bin/java -jar ./bin/GenomeAnalysisTK.jar \
+-T UnifiedGenotyper \
+-R data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+-I data/alignments/bam_temp/SL29_0.dup.bam \
+-I data/alignments/bam_temp/SL29_5.dup.bam \
+-glm BOTH \
+-ploidy 2 \
+--output_mode EMIT_ALL_SITES \
+--heterozygosity 0.02 \
+--indel_heterozygosity 0.002 \
+-o data/alignments/bam_temp/SL29_dup_UG.vcf
+```
+
+## 21/7/2021
+
+today - bgzipping, tabixing, and getting first pass
+mutations
+
+```bash
+bgzip data/alignments/bam_temp/SL27_dup_UG.vcf
+bgzip data/alignments/bam_temp/SL29_dup_UG.vcf
+tabix -p vcf data/alignments/bam_temp/SL27_dup_UG.vcf.gz
+tabix -p vcf data/alignments/bam_temp/SL29_dup_UG.vcf.gz
+```
+
+and now to get the mutations:
+
+```bash
+time python analysis/filtering/filter_candidate_muts.py \
+--vcf data/alignments/bam_temp/SL27_dup_UG.vcf.gz \
+--gq 30 --out_format table --vcf_type pairs \
+--verbose_level 1 --out SL27_dup_test.tsv
+
+time python analysis/filtering/filter_candidate_muts.py \
+--vcf data/alignments/bam_temp/SL29_dup_UG.vcf.gz \
+--gq 30 --out_format table --vcf_type pairs \
+--verbose_level 1 --out SL29_dup_test.tsv
+```
+
+66 muts in SL27 but 0 (???) in 29? let's reduce the GQ threshold to 20
+
+## 24/7/2021
+
+checking to see if the SL27 calls are a subset of the existing calls
+we've already manually checked:
+
+```R
+library(tidyverse)
+d_new = read_tsv('SL27_dup_test.tsv', col_types = cols()) # 65
+d_old = read_tsv('data/mutations/gq_tests/pairs_20/SL27_GQ20.txt', col_types = cols()) # 116
+
+# return rows that are in d_new but not d_old
+anti_join(d_new, d_old, by = c('chrom', 'pos')) # returns nothing! 
+# d_new is a subset of d_old
+```
 
 
 
