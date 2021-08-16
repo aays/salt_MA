@@ -216,3 +216,173 @@ with open('data/rate/total_callables_samples.tsv', 'w') as f:
             print(datetime.now())
 ```
                 
+## 3/8/2021
+
+today - generate annotation callable tables for Perrineau and expressed gene sets
+
+need to also do this for the MA dataset - looks like there's a summarised
+sitegens table in `bgi_full_MA/callable_sites/total_site_gens.txt.gz`
+
+gonna be grouping by samples here to speed things up
+
+```python
+import csv
+import gffutils
+from tqdm import tqdm
+import pysam
+
+annotations = ['intronic', 'utr5', 'utr3', 'CDS'] # don't need intergenic here
+
+# expressed genes
+db = gffutils.FeatureDB('data/rate/gene_lists/expressed_genes.db', keep_order=True)
+total_genes = len([gene for gene in db.all_features()])
+
+with open('data/rate/gene_lists/expressed_annotation_callables.tsv', 'w') as f:
+    fieldnames = ['sample_factor', 'gene_name', 'scaffold', 'start',
+        'end', 'annotation', 'count']
+    writer = csv.DictWriter(f, delimiter='\t', fieldnames=fieldnames)
+    writer.writeheader()
+
+    ant_reader = pysam.TabixFile('data/references/annotation_table.txt.gz')
+    annotation_header = ant_reader.header[-1].split('\t')
+
+    callables_table = pysam.TabixFile('data/rate/all_callable.tsv.gz')
+    samples = callables_table.header[0].split('\t')[2:]
+    sample_groups = {
+        'CC_0': [i for i, s in enumerate(samples) if s.startswith('CC') and s.endswith('0')],
+        'CC_5': [i for i, s in enumerate(samples) if s.startswith('CC') and s.endswith('5')],
+        'DL_0': [i for i, s in enumerate(samples) if s.startswith('DL') and s.endswith('0')],
+        'DL_5': [i for i, s in enumerate(samples) if s.startswith('DL') and s.endswith('5')],
+        'SL_0': [i for i, s in enumerate(samples) if s.startswith('SL') and s.endswith('0')],
+        'SL_5': [i for i, s in enumerate(samples) if s.startswith('SL') and s.endswith('5')]
+        }
+
+    for gene in tqdm(db.all_features(), desc='genes', total=total_genes):
+        scaffold, start, end = gene.chrom, gene.start, gene.end
+
+        for ant in annotations:
+            ant_idx = annotation_header.index(ant)
+            lookup = ''
+            for record in ant_reader.fetch(scaffold, start, end):
+                if record.split('\t')[ant_idx] == '1':
+                    lookup += '1'
+                else:
+                    lookup += '0'
+            
+            for sample_group in sample_groups.keys():
+                idx_list = sample_groups[sample_group]
+                callables_count = 0
+                callables_region = callables_table.fetch(scaffold, start, end)
+                for i, record in enumerate(callables_region):
+                    if lookup[i] == '1':
+                        record = [c for i, c in enumerate(record.split('\t')[2:]) if i in idx_list]
+                        callables_count += record.count('1')
+                    else:
+                        continue
+                out_dict = {
+                    'sample_factor': sample_group, 'gene_name': gene.attributes['ID'],
+                    'scaffold': scaffold, 'start': start, 'end': end,
+                    'annotation': ant, 'count': callables_count}
+                writer.writerow(out_dict)
+```
+
+ran for 1 hr 45 min (longer than it needed to given I accidentally left 
+intergenic in there...) - repeating for Perrineau genes by switching the gff and outfile
+
+update: Perrineau's done in 15 minutes - now to transform these before exporting:
+
+```R
+library(tidyverse)
+
+# in data/rate/gene_lists
+expressed = read_tsv('expressed_annotation_callables.tsv', col_types = cols())
+perrineau = read_tsv('perrineau_annotation_callables.tsv', col_types = cols())
+
+expressed_summarised = expressed %>%
+    group_by(sample_factor, annotation) %>%
+    summarise(callables_total = sum(count))
+
+perrineau_summarised = perrineau %>%
+    group_by(sample_factor, annotation) %>%
+    summarise(callables_total = sum(count))
+
+write_tsv(expressed_summarised, 'expressed_callables_summarised.tsv')
+write_tsv(perrineau_summarised, 'perrineau_callables_summarised.tsv')
+
+```
+
+getting MA callables - symlinked `bgi_full_MA/callable_sites/total_site_gens.txt.gz`
+into `data/rate`
+
+```python
+import csv
+import gffutils
+from tqdm import tqdm
+import pysam
+
+annotations = ['intronic', 'utr5', 'utr3', 'CDS'] # don't need intergenic here
+
+# expressed genes
+db = gffutils.FeatureDB('data/rate/gene_lists/expressed_genes.db', keep_order=True)
+total_genes = len([gene for gene in db.all_features()])
+
+with open('data/rate/gene_lists/expressed_ma_callables.tsv', 'w') as f:
+    fieldnames = ['sample_factor', 'gene_name', 'scaffold', 'start',
+        'end', 'annotation', 'count']
+    writer = csv.DictWriter(f, delimiter='\t', fieldnames=fieldnames)
+    writer.writeheader()
+
+    ant_reader = pysam.TabixFile('data/references/annotation_table.txt.gz')
+    annotation_header = ant_reader.header[-1].split('\t')
+
+    callables_table = pysam.TabixFile('data/rate/total_site_gens.txt.gz')
+
+    for gene in tqdm(db.all_features(), desc='genes', total=total_genes):
+        scaffold, start, end = gene.chrom, gene.start, gene.end
+
+        for ant in annotations:
+            ant_idx = annotation_header.index(ant)
+            lookup = ''
+            for record in ant_reader.fetch(scaffold, start, end):
+                if record.split('\t')[ant_idx] == '1':
+                    lookup += '1'
+                else:
+                    lookup += '0'
+            
+            callables_count = 0
+            callables_region = callables_table.fetch(scaffold, start, end)
+            for i, record in enumerate(callables_region):
+                if lookup[i] == '1':
+                    callables_count += float(record.split('\t')[-1])
+                else:
+                    continue
+            out_dict = {
+                'sample_factor': 'ma_original', 'gene_name': gene.attributes['ID'],
+                'scaffold': scaffold, 'start': start, 'end': end,
+                'annotation': ant, 'count': callables_count}
+            writer.writerow(out_dict)
+```
+
+took 20 minutes for expressed, and then just 3 when repeated for Perrineau
+
+quick transformations:
+
+```R
+library(tidyverse)
+
+# in data/rate/gene_lists
+expressed = read_tsv('expressed_ma_callables.tsv', col_types = cols())
+perrineau = read_tsv('perrineau_ma_callables.tsv', col_types = cols())
+
+expressed_summarised = expressed %>%
+    group_by(sample_factor, annotation) %>%
+    summarise(callables_total = sum(count))
+
+perrineau_summarised = perrineau %>%
+    group_by(sample_factor, annotation) %>%
+    summarise(callables_total = sum(count))
+
+write_tsv(expressed_summarised, 'expressed_ma_callables_summarised.tsv')
+write_tsv(perrineau_summarised, 'perrineau_ma_callables_summarised.tsv')
+
+```

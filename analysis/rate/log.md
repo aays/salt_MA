@@ -1092,7 +1092,53 @@ gene_sets('data/rate/mut_describer/all_mutations_w_shared_hmmIBD_corrected_FPKM.
     'data/rate/mut_describer/adaptation.gene_sets.tsv', mode='adaptation')
     
 ```
+
+## 2/8/2021
+
+also need to do this for the indel dataset! 
         
+```python
+import csv
+from tqdm import tqdm
+
+# expressed genes
+with open('data/rate/ka_ks/all_expressed.tsv', 'r') as f:
+    reader = csv.DictReader(f, delimiter='\t')
+    expressed = [line['gene_name'] for line in reader]
+
+print(len(expressed)) # 12073
+
+# salt genes (Perrineau dataset)
+with open('data/rate/ka_ks/all_perrineau.tsv', 'r') as f:
+    reader = csv.DictReader(f, delimiter='\t')
+    perrineau = [line['gene_name'] for line in reader]
+
+print(len(perrineau)) # 2325
+
+with open('data/mutations/mut_describer/indels_described.tsv', 'r') as f:
+    reader = csv.DictReader(f, delimiter='\t')
+    fieldnames = reader.fieldnames
+    fieldnames.extend(['expressed', 'expressed_genes', 'perrineau', 'perrineau_genes'])
+    with open('data/rate/mut_describer/indels_described.gene_sets.tsv', 'w') as f:
+        writer = csv.DictWriter(f, delimiter='\t', fieldnames=fieldnames)
+        writer.writeheader()
+        for line in tqdm(reader):
+            line_out = line
+            genes = eval(line['feature_names'])
+            if any([gene in expressed for gene in genes]):
+                line_out['expressed'] = 1
+                line_out['expressed_genes'] = [gene for gene in genes if gene in expressed]
+            else:
+                line_out['expressed'] = 0
+                line_out['expressed_genes'] = 'NA'
+            if any([gene in perrineau for gene in genes]):
+                line_out['perrineau'] = 1
+                line_out['perrineau_genes'] = [gene for gene in genes if gene in perrineau]
+            else:
+                line_out['perrineau'] = 0
+                line_out['perrineau_genes'] = 'NA'
+            writer.writerow(line_out)
+```
 
 
 
