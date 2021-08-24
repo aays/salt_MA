@@ -2962,3 +2962,32 @@ with open('data/mutations/mut_describer/indels_described_corrected.tsv', 'w') as
 renaming this to `indels_described.tsv` and removing the other one - now
 to create 'gene set' versions - off to `analysis/rate/log.md`
 
+## 24/8/2021
+
+shoot - the code above doesn't handle the `41_46` samples as expected
+
+```python
+import csv
+from copy import deepcopy
+
+with open('data/mutations/mut_describer/indels_described.tsv', 'r') as f:
+    reader = csv.DictReader(f, delimiter='\t')
+    with open('data/mutations/mut_describer/indels_described_corrected.tsv', 'w') as f_out:
+        writer = csv.DictWriter(f_out, delimiter='\t', fieldnames=reader.fieldnames)
+        writer.writeheader()
+        for line in reader:
+            sample = line['mutant_sample']
+            if '_4' in sample:
+                sample_type = sample[-1]
+                if sample_type == '0':
+                    sample_out = sample.split('_')[0] + '_0'
+                elif sample_type == '5':
+                    sample_out = 'DL' + '_'.join(sample.split('_')[1:])
+                line_out = deepcopy(line)
+                line_out['mutant_sample'] = sample_out
+                writer.writerow(line_out)
+            else:
+                writer.writerow(line)
+```
+
+looks good - redoing for the gene sets version in `data/rate/` and then renaming files
