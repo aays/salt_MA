@@ -2687,7 +2687,278 @@ time python analysis/filtering/mut_describer.py \
 --outname data/mutations/mut_describer/indels_described.tsv
 ```
 
+## 17/8/2021
 
+today - do local variant calls around questionable indels with the 0 and 5
+sample and all 'past' (e.g. D/S/CC line) sample bams
 
+this requires a script that'll take in mut describer lines - the bams
+can be hardcoded but but the salt MA samples will need to be selected
 
+going to call this `indel_calls_redone.py`
+
+## 18/8/2021
+
+first pass ready - here goes
+
+```bash
+mkdir -p data/mutations/indels_redone
+mkdir -p data/alignments/orig_MA_bams
+
+ln -sv /node1nfs/archive/data/chlamydomonas/bgi_full_MA/bgi_full_MA/haplotypeCaller_realigned_bams/*_1.ba? \
+data/alignments/orig_MA_bams
+
+python analysis/filtering/indel_calls_redone.py \
+--mut_file data/mutations/mut_tables/all_indels.tsv \
+--bam_dir data/alignments/bam/ \
+--sample_bam_dirs ../alignments/BAM_files data/alignments/orig_MA_bams
+--outdir data/mutations/indels_redone
+```
+
+took 45 minutes but looks good - next up, 'extracting' the variant calls at
+each of those sites for me to squint at - going to have to make something
+similar to the `multi_indels` file from earlier, but for now, just going to
+bgzip and tabix all these files:
+
+```bash
+for fname in *.vcf; do
+    echo ${fname}
+    bgzip ${fname};
+    tabix -p vcf ${fname}.gz
+done
+```
+
+tomorrow - will need to loop through these VCFs and extract the genotype calls
+into a spreadsheet equivalent - or maybe try to solve programmatically 'with ancestry' first?
+I think that might actually be doable - I ought to start with that, borrowing from
+`mut_describer.py`'s logic
+
+## 20/8/2021
+
+made a copy of mut describer with different vcf path handling specifically
+for this purpose:
+
+```bash
+python analysis/filtering/indel_describer.py \
+--fname data/mutations/mut_tables/all_indels.tsv \
+--vcf_path data/mutations/indels_redone/ \
+--ref_fasta data/references/chlamy.5.3.w_organelles_mtMinus.fa \
+--ant_file data/references/annotation_table.txt.gz \
+--outname indel_test.tsv
+```
+    
+so this is breaking the mutation class and I'm too tired to detective out
+why - let's just do this the agonizingly manual way
+
+```python
+import csv
+from cyvcf2 import VCF
+
+with open('data/mutations/mut_tables/all_indels.tsv', 'r') as f:
+    indels = [l for l in csv.DictReader(f, delimiter='\t')]
+
+with open('indel_calls.tsv', 'w') as f:
+    fieldnames = ['fname', 'chrom', 'pos', 'GT_0', 'GT_5', 'GQ_0', 'GQ_5']
+    first_run = True
+    for indel in indels:
+        fname = indel['fname'].replace('_samples', '')
+        chrom = indel['chrom']
+        pos = indel['pos']
+        vcf_path = f'data/mutations/indels_redone/{fname}_{chrom}_{pos}.vcf.gz'
+        reader = VCF(vcf_path)
+        sample_ref = reader.samples
+        if first_run:
+            sample_cols = [s for s in sample_ref if not s.endswith('0') and not s.endswith('5')]
+            fieldnames_added = [(f'{s}_GT', f'{s}_GQ') for s in sample_cols]
+            fieldnames.extend([colname for pair in fieldnames_added for colname in pair])
+            writer = csv.DictWriter(f, delimiter='\t', fieldnames=fieldnames)
+            writer.writeheader()
+            first_run = False
+
+        rec = [rec for rec in reader(f'{chrom}:{pos}-{pos}')]
+        if rec:
+            rec = rec[0]
+        else:
+            print(f'fname {chrom} {pos}')
+
+        if '_4' in fname:
+            sample_0 = fname.split('_')[0] + '_0'
+            sample_5 = 'DL' + fname.split('_')[1] + '_5'
+        else:
+            sample_0 = fname + '_0'
+            sample_5 = fname + '_5'
+        out_dict = {'fname': fname, 'chrom': chrom, 'pos': pos,
+            'GT_0': rec.gt_bases[sample_ref.index(sample_0)],
+            'GT_5': rec.gt_bases[sample_ref.index(sample_5)],
+            'GQ_0': rec.gt_quals[sample_ref.index(sample_0)],
+            'GQ_5': rec.gt_quals[sample_ref.index(sample_5)]}
+        for sample in sample_cols:
+            out_dict[sample + '_GT'] = rec.gt_bases[sample_ref.index(sample)]
+            out_dict[sample + '_GQ'] = rec.gt_quals[sample_ref.index(sample)]
+        writer.writerow(out_dict)
+```
+
+three indels seem to have changed position:
+
+```
+DL40 chromosome_6 1088012
+DL53 chromosome_4 274884
+DL57 chromosome_3 4559828
+```
+
+a couple indels in, it's seeming evident I need to look at these in IGV - sigh
+
+need to write a script that creates filtered bams for use with IGV - I can
+use the merged bam functionality to make it so that I just have a 0 bam, a 5 bam,
+and then three combined bams (CC, D, S)
+
+[merged bam documentation](https://software.broadinstitute.org/software/igv/merged_BAMs) -
+just need a `.bam.list` file that contains the list of desired bam files listed
+by file path
+
+I can likely use `export_IGV.py` to do the 0 and 5 bams for the indels:
+
+```bash
+mkdir -p data/mutations/indels_redone/vcfs/
+mv -v data/mutations/indels_redone/*vcf* data/mutations/indels_redone/vcfs/
+mkdir -p data/mutations/indels_redone/filtered_bams/
+
+time python analysis/filtering/export_IGV.py \
+--fname data/mutations/mut_tables/all_indels.tsv \
+--bam_dir data/alignments/bam \
+--region_size 200 --outdir data/mutations/indels_redone/filtered_bams/
+```
+
+going to put them in sample specific directories to make things less messy:
+
+```python
+# in data/mutations/indels_redone/filtered_bams
+import os
+import shutil
+from glob import glob
+
+prefixes = glob('*_0.sam')
+prefixes = [prefix.rstrip('.sam')[:-2] for prefix in prefixes]
+
+for dirname in prefixes:
+    os.mkdir(dirname)
+
+for prefix in prefixes:
+    bams = glob(f'{prefix}_*.sam')
+    for bam in bams:
+        shutil.move(bam, '{prefix}/' + bam)
+```
+
+now to get filtered bams for each of the previous samples:
+
+```python
+import os
+import re
+import subprocess
+from glob import glob
+from tqdm import tqdm
+
+orig_ma = glob('data/alignments/orig_MA_bams/*bam')
+orig_salt = glob('../alignments/BAM_files/*bam')
+
+prefixes = glob('data/mutations/indels_redone/filtered_bams/*_*') # lol
+for prefix in tqdm(prefixes):
+    match = re.search('([A-Z0-9_]+)_([A-Za-z0-9_]+)_([0-9]+)', prefix)
+    sample, chrom, pos = match.groups()
+    pos = int(pos)
+    region = f'{chrom}:{pos-200}-{pos+200}'
+    for bam in orig_ma:
+        bam_basename = os.path.basename(bam)
+        cmd = f'samtools view {bam} {region} -b -o {prefix}/{bam_basename}'
+        subprocess.run(cmd.split(' '))
+        index_cmd = f'samtools index {prefix}/{bam_basename}'
+        subprocess.run(index_cmd.split(' '))
+        with open(f'{prefix}/{sample}_{chrom}_{pos}_MA.bam.list', 'a') as f:
+            f.write(bam_basename + '\n')
+
+# now that that worked - redoing for salt
+for prefix in tqdm(prefixes):
+    match = re.search('([A-Z0-9_]+)_([A-Za-z0-9_]+)_([0-9]+)', prefix)
+    sample, chrom, pos = match.groups()
+    pos = int(pos)
+    region = f'{chrom}:{pos-200}-{pos+200}'
+    for bam in orig_salt:
+        bam_basename = os.path.basename(bam)
+        cmd = f'samtools view {bam} {region} -b -o {prefix}/{bam_basename}'
+        subprocess.run(cmd.split(' '))
+        index_cmd = f'samtools index {prefix}/{bam_basename}'
+        subprocess.run(index_cmd.split(' '))
+        if bam_basename.startswith('D'):
+            with open(f'{prefix}/{sample}_{chrom}_{pos}_DL.bam.list', 'a') as f:
+                f.write(bam_basename + '\n')
+        elif bam_basename.startswith('S'):
+            with open(f'{prefix}/{sample}_{chrom}_{pos}_SL.bam.list', 'a') as f:
+                f.write(bam_basename + '\n')
+
+```
+
+## 23/8/2021
+
+alright - now that the indels have been reviewed, time to generate
+a mut describer file and then update all the `mutant_sample` calls
+with what's in `data/mutations/indels_redone/indel_calls_reviewed.tsv`
+
+```bash
+time python analysis/filtering/mut_describer.py \
+--fname data/mutations/mut_tables/all_indels.tsv \
+--vcf_path data/alignments/genotyping/HC/combined \
+--ref_fasta data/references/chlamy.5.3.w_organelles_mtMinus.fasta \
+--ant_file data/references/annotation_table.txt.gz \
+--outname data/mutations/mut_describer/indels_described.tsv
+```
+
+now to update this by reading through the reviewed tsv:
+
+```python
+import csv
+from tqdm import tqdm
+from copy import deepcopy
+
+# going to have to work with position - should make sure there are no dupes!
+# checking:
+with open('data/mutations/indels_redone/indel_calls_reviewed.tsv', 'r') as f:
+    positions = [line.split('\t')[3] for line in f]
+    assert len(positions) == len(set(positions))
+
+# shit - there are some repeats - we'll have to do this positionally
+
+with open('data/mutations/indels_redone/indel_calls_reviewed.tsv', 'r') as f:
+    reader = csv.DictReader(f, delimiter='\t')
+    reviews = [line for line in reader] # will query this positionally - feels fragile...
+    
+with open('data/mutations/mut_describer/indels_described_corrected.tsv', 'w') as f:
+    with open('data/mutations/mut_describer/indels_described.tsv', 'r') as f_in:
+        reader = csv.DictReader(f_in, delimiter='\t')
+        writer = csv.DictWriter(f, delimiter='\t', fieldnames=reader.fieldnames)
+        writer.writeheader()
+
+        for i, line in tqdm(enumerate(reader)):
+            chrom, pos = line['chromosome'], line['position']
+            line_ref = reviews[i]
+            assert line_ref['pos'] == pos
+
+            sample_call = line_ref['mutant sample']
+            if sample_call == 'DISCARD':
+                continue
+            else:
+                mutant_sample = line_ref['sample'] + f'_{sample_call}'
+                gt_0 = line_ref['GT_0'].split('/')[0]
+                gt_5 = line_ref['GT_5'].split('/')[0]
+                if sample_call == '0':
+                    mut_type = f"{gt_5}>{gt_0}"
+                elif sample_call == '5':
+                    mut_type = f"{gt_0}>{gt_5}"
+            out = deepcopy(line)
+            out['mutant_sample'] = line_ref['sample'] + '_' + sample_call
+            out['mutation'] = mut_type
+            writer.writerow(out)
+```
+
+renaming this to `indels_described.tsv` and removing the other one - now
+to create 'gene set' versions - off to `analysis/rate/log.md`
 
