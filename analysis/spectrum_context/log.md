@@ -315,6 +315,191 @@ time python analysis/spectrum_context/get_triplets.py \
 --out data/spectrum_context/triplets/adaptation_all.tsv
 ```
 
+## 15/8/2021
+
+today - redoing the base spectrum analysis as a rate instead of a proportion -
+e.g. normalizing all `A>C` mutations by the number of callable A sites
+
+I should be able to get this directly from the sample-specific gvcfs - these
+were used to make the `all_callables` file after all, but also have base info
+which means I don't have to get info from two separate files at once
+
+going to do this in the console, don't know if this needs a script necessarily:
+
+```python
+import os
+import csv
+from glob import glob
+from cyvcf2 import VCF
+from tqdm import tqdm
+
+vcf_list = glob('data/alignments/genotyping/gvcfs/*vcf.gz')
+scaffolds = [f'chromosome_{i}' for i in range(1, 18)]
+scaffolds.extend([f'scaffold_{i}' for i in range(18, 55)])
+scaffolds.extend(['cpDNA', 'mtDNA'])
+
+with open('data/rate/base_callables.tsv', 'w') as f:
+    fieldnames = ['sample', 'chromosome', 'A_count', 'C_count', 'G_count', 'T_count', 'N_count']
+    writer = csv.DictWriter(f, delimiter='\t', fieldnames=fieldnames)
+    writer.writeheader()
+    
+    for vcf_fname in vcf_list:
+        print(vcf_fname)
+        reader = VCF(vcf_fname)
+        prefix = os.path.basename(vcf_fname).rstrip('.g.vcf.gz')
+        for chromosome in scaffolds:
+            counter = {'A': 0, 'T': 0, 'C': 0, 'G': 0, 'N': 0}
+            for record in tqdm(reader(chromosome), desc=f'{prefix} {chromosome}'):
+                if len(record.ALT) > 1:
+                    alt = [base for base in record.ALT if len(base) == 1]
+                    if len(alt) > 1: # het call
+                        continue
+                    if len(alt) == 0: # indel
+                        continue
+                    else:
+                        counter[alt[0]] += 1
+                else:
+                    counter[record.REF] += 1
+            out_dict = {'sample': prefix, 'chromosome': chromosome,
+                'A_count': counter['A'], 'C_count': counter['C'],
+                'G_count': counter['G'], 'T_count': counter['T'],
+                'N_count': counter['N']}
+            writer.writerow(out_dict)
+                    
+```
+
+## 21/8/2021
+
+need to also get base callables for the MA and HS lines - let's find these gvcfs
+
+re: salt, it seems the gvcfs are nowhere to be found but 
+`alignments/genotyping/unified_genotyper/UG_diploid/salt/salt_aligned_salt_UG_diploid.vcf.gz`
+contains reference sites as well, so I'll have to work with that
+
+re: MA, seems there are also all sites VCFs in `bgi_full_MA/vcfs` - I'm going
+to just use the `CC_1` sample callables for these though
+
+```python
+# MA first
+import os
+import csv
+from glob import glob
+from cyvcf2 import VCF
+from tqdm import tqdm
+
+scaffolds = [f'chromosome_{i}' for i in range(1, 18)]
+scaffolds.extend([f'scaffold_{i}' for i in range(18, 55)])
+scaffolds.extend(['cpDNA', 'mtDNA'])
+
+sample_list = ['CC1373', 'CC1952', 'CC2342', 'CC2344', 'CC2931', 'CC2937']
+
+with open('data/rate/orig_MA_base_callables.tsv', 'w') as f:
+    fieldnames = ['sample', 'chromosome', 'A_count', 'C_count', 'G_count', 'T_count', 'N_count']
+    writer = csv.DictWriter(f, delimiter='\t', fieldnames=fieldnames)
+    writer.writeheader()
+    
+    for sample in sample_list:
+        vcf_fname = f'/research/projects/chlamydomonas/bgi_full_MA/vcfs/{sample}/{sample}.vcf.gz'
+        reader = VCF(vcf_fname)
+        sample_idx = reader.samples.index(f'{sample}_1')
+
+        for chromosome in scaffolds:
+            counter = {'A': 0, 'T': 0, 'C': 0, 'G': 0, 'N': 0}
+            for record in tqdm(reader(chromosome), desc=f'{sample} {chromosome}'):
+                base = record.gt_bases[sample_idx]
+                if '.' in base:
+                    continue
+                if not len(set(base.split('/'))) == 1:
+                    continue
+                if not max([len(call) for call in base.split('/')]) == 1:
+                    continue
+                counter[base.split('/')[0]] += 1
+            out_dict = {'sample': prefix, 'chromosome': chromosome,
+                'A_count': counter['A'], 'C_count': counter['C'],
+                'G_count': counter['G'], 'T_count': counter['T'],
+                'N_count': counter['N']}
+            writer.writerow(out_dict)
+                    
+```
+
+shoot - `out_dict[sample]` ended up writing an unrelated file path - will
+need to fix that later
+
+in the meantime, doing this for the HS lines:
+
+`alignments/genotyping/unified_genotyper/UG_diploid/salt/salt_aligned_salt_UG_diploid.vcf.gz`
+
+```python
+# HS
+import os
+import csv
+from glob import glob
+from cyvcf2 import VCF
+from tqdm import tqdm
+
+scaffolds = [f'chromosome_{i}' for i in range(1, 18)]
+scaffolds.extend([f'scaffold_{i}' for i in range(18, 55)])
+scaffolds.extend(['cpDNA', 'mtDNA'])
+
+reader = VCF('../alignments/genotyping/unified_genotyper/UG_diploid/salt/salt_aligned_salt_UG_diploid.vcf.gz'
+samples = reader.samples
+
+with open('data/rate/HS_base_callables.tsv', 'w') as f:
+    fieldnames = ['sample', 'chromosome', 'A_count', 'C_count', 'G_count', 'T_count', 'N_count']
+    writer = csv.DictWriter(f, delimiter='\t', fieldnames=fieldnames)
+    writer.writeheader()
+
+    for scaffold in scaffolds:
+        sample_dict = {k: {'A': 0, 'T': 0, 'C': 0, 'G': 0, 'N': 0}
+            for k in samples}
+        for record in tqdm(reader(scaffold), desc=f'{scaffold}):
+            for i, sample in enumerate(samples):
+                base = record.gt_bases[i]
+                if '.' in base:
+                    continue
+                if not len(set(base.split('/'))) == 1:
+                    continue
+                if not max([len(call) for call in base.split('/')]) == 1:
+                    continue
+                sample_dict[sample][base.split('/')[0]] += 1
+        for sample in samples:
+            out_dict = {'sample': sample, 'chromosome': scaffold,
+                'A_count': sample_dict[sample]['A'],
+                'C_count': sample_dict[sample]['C'],
+                'G_count': sample_dict[sample]['G'],
+                'T_count': sample_dict[sample]['T'],
+                'N_count': sample_dict[sample]['N']}
+            writer.writerow(out_dict)
+```
+
+## 24/8/2021
+
+looks good - now to fix the sample column in the earlier MA callables
+
+```python
+import csv
+from copy import deepcopy
+
+# this is the order they were parsed in 
+sample_list = ['CC1373', 'CC1952', 'CC2342', 'CC2344', 'CC2931', 'CC2937']
+
+with open('data/rate/orig_MA_base_callables.tsv', 'r') as f_in:
+    reader = csv.DictReader(f_in, delimiter='\t')
+    with open('data/rate/MA_base_callables.tsv', 'w') as f_out:
+        writer = csv.DictWriter(f_out, delimiter='\t', fieldnames=reader.fieldnames)
+        writer.writeheader()
+        counter = -1
+        for line in reader:
+            if line['chromosome'] == 'chromosome_1':
+                counter += 1
+                sample = sample_list[counter]
+            line_out = deepcopy(line)
+            line_out['sample'] = sample
+            writer.writerow(line_out)
+```
+
+looks good - removing the old dataset and then taking this to RStudio
+
 
 
 
