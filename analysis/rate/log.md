@@ -1140,14 +1140,9 @@ with open('data/mutations/mut_describer/indels_described.tsv', 'r') as f:
             writer.writerow(line_out)
 ```
 
+## 21/8/2021
 
-
-
-
-
-
-
-
+reran the above now that I have a 'final' indel dataset
 
 
 

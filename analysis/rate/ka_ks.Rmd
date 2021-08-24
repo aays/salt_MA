@@ -13,6 +13,7 @@ library(here)
 library(boot)
 library(broom)
 library(tictoc)
+library(wesanderson)
 ```
 
 # Data import
@@ -72,13 +73,13 @@ $$
 genome_sample_callables = all_genome_callables %>% 
   # filter(str_detect(scaffold, 'scaffold', negate = TRUE)) %>% 
   group_by(sample_group, sample_type) %>% 
-  summarise(across(contains('syn'), sum))
+  summarise(across(contains('syn'), sum), .groups = 'drop')
 
 # get muts per sample type
 genome_sample_counts = all_genome %>% 
   select(-nonsyn, -syn) %>% # these values only consider chrs with muts
   group_by(sample_group, sample_type) %>% 
-  summarise(across(.cols = contains('syn'), .fns = sum))
+  summarise(across(.cols = contains('syn'), .fns = sum), .groups = 'drop')
 ```
 
 and now to calculate Ka/Ks:
@@ -104,6 +105,37 @@ ka_ks_genome = genome_sample_counts %>%
 
 ka_ks_genome
 ```
+
+Combining the groups:
+
+```{r}
+ka_ks_summarised = genome_sample_counts %>% 
+  
+  # join callables and counts
+  full_join(
+    genome_sample_callables, by = c('sample_group', 'sample_type')
+  ) %>% 
+  replace_na(list(nonsyn_muts = 0, syn_muts = 0)) %>% 
+  
+  # summarise across groups
+  group_by(sample_type) %>% 
+  summarise(
+    across(where(is.numeric), sum)
+  ) %>% 
+  
+  # compute Ka, Ks, Ka/Ks values
+  mutate(
+    ka = nonsyn_muts / nonsyn,
+    ks = syn_muts / syn
+  ) %>% 
+  mutate(
+    ka_ks = ka / ks
+  ) %>% 
+  select(sample_type, ka_ks, everything())
+
+ka_ks_summarised
+```
+
 
 ## Bootstrap confidence intervals
 
@@ -133,12 +165,13 @@ muts_described = read_tsv(
 ### Resampling muts with replacement
 
 ```{r}
-ka_ks_calc = function(d, indices) {
+ka_ks_calc = function(d, indices, summarised = FALSE) {
   d_resampled = d[indices,]
   d_summarised = d_resampled %>% 
     
     # restructure resampled dataset to match join from earlier
-    group_by(sample_group, sample_type) %>% 
+    { if (summarised == TRUE) group_by(., sample_type) else . } %>% 
+    { if (summarised == FALSE) group_by(., sample_group, sample_type) else . } %>% 
     count(nonsyn_v_syn) %>% 
     ungroup() %>% 
     pivot_wider(names_from = nonsyn_v_syn, values_from = n, values_fill = 0) 
@@ -147,9 +180,20 @@ ka_ks_calc = function(d, indices) {
     d_summarised$synonymous = 0
   }
   
-  # get sample group and type
-  current_sample_group = unique(d_summarised$sample_group)
+  # get sample type and group if needed
   current_sample_type = unique(d_summarised$sample_type)
+  join_vars = 'sample_type'
+  if (summarised == FALSE) {
+    current_sample_group = unique(d_summarised$sample_group)
+    join_vars = c('sample_group', join_vars)
+  }
+  
+  # prep callables dataset
+  d_callables = genome_sample_callables %>% 
+    filter(sample_type == current_sample_type) %>% 
+    { if (summarised == FALSE) filter(., sample_group == current_sample_group) else . } %>% 
+    { if (summarised == TRUE) group_by(., sample_type) %>% 
+        summarise(across(nonsyn:syn, sum)) else . }
   
   # get callables to compute ka/ks
   d_summarised = d_summarised %>% 
@@ -158,10 +202,7 @@ ka_ks_calc = function(d, indices) {
     
     # get ka/ks
     full_join(
-      filter(genome_sample_callables,
-             sample_group == current_sample_group,
-             sample_type == current_sample_type), 
-      by = c('sample_group', 'sample_type')
+      d_callables, by = join_vars
     ) %>% 
     replace_na(
       list(nonsyn_muts = 0, syn_muts = 0)
@@ -174,7 +215,8 @@ ka_ks_calc = function(d, indices) {
       ka_ks = ka / ks) %>% 
     
     # remove extra columns and prep for 'export'
-    select(sample_group, sample_type, ka_ks) %>% 
+    { if (summarised == FALSE) select(., sample_group, sample_type, ka_ks) else . } %>% 
+    { if (summarised == TRUE) select(., sample_type, ka_ks) else . } %>% 
     ungroup()
 
     return(d_summarised$ka_ks)
@@ -211,6 +253,33 @@ ka_ks_cis
 
 ```
 
+Summarised across 0 and 5:
+
+```{r}
+get_cis_summarised = function(d, rep_count) {
+  tic(msg = paste('bootstrap for', unique(d$sample_type)))
+  message(paste('starting', unique(d$sample_type)))
+  boot_obj = boot(data = d, statistic = ka_ks_calc, R = rep_count, summarised = TRUE)
+  ci_obj = boot.ci(boot_obj, type = 'bca')$bca[c(4,5)] # lower and upper bounds
+  out = data.frame(
+    sample_type = unique(d$sample_type),
+    lower_ci = ci_obj[1],
+    upper_ci = ci_obj[2]
+  )
+  toc(log = TRUE)
+  return(out)
+}
+
+ka_ks_cis_summarised = muts_described %>% 
+  split(.$sample_type) %>% 
+  map_dfr(~ get_cis_summarised(., 1000)
+  ) 
+
+ka_ks_cis_summarised
+```
+
+
+
 ### Combining with Ka/Ks values above
 
 ```{r}
@@ -226,6 +295,25 @@ ka_ks_genome_final
 write_tsv(
   ka_ks_genome_final, 
   file = here('data/rate/ka_ks/ka_ks_genome_final_CIs.tsv'))
+```
+
+Summarised:
+
+```{r}
+ka_ks_summarised_final = ka_ks_summarised %>% 
+  mutate(sample_type = as.character(sample_type)) %>% 
+  full_join(
+    ka_ks_cis_summarised,
+    by = 'sample_type'
+  ) %>% 
+  select(sample_type, ka_ks, contains('ci'), everything())
+
+ka_ks_summarised_final
+
+write_tsv(
+  ka_ks_summarised_final,
+  file = here('data/rate/ka_ks/ka_ks_summarised_final_CIs.tsv')
+)
 ```
 
 
@@ -325,6 +413,34 @@ expressed_ka_ks = all_expressed %>%
 expressed_ka_ks
 ```
 
+Summarised across sample groups:
+
+```{r}
+expressed_ka_ks_summarised = expressed_ka_ks %>% 
+  select(
+    sample_group, sample_type, nonsyn_muts, syn_muts, nonsyn, syn
+  ) %>% 
+  
+  # sum values
+  group_by(sample_type) %>% 
+  summarise(
+    across(where(is.numeric), sum)
+  ) %>% 
+  
+  # get ka/ks
+  mutate(
+    ka = nonsyn_muts / nonsyn,
+    ks = syn_muts / syn
+  ) %>% 
+  mutate(
+    ka_ks = ka / ks
+  ) %>% 
+  select(
+    sample_type, ka_ks, everything()
+  )
+```
+
+
 
 ## Bootstrap confidence intervals
 
@@ -363,7 +479,7 @@ muts_described_expressed = read_tsv(
 ### Resampling muts with replacement
 
 ```{r}
-ka_ks_gene_boot = function(d, indices) {
+ka_ks_gene_boot = function(d, indices, summarised = FALSE) {
   # compute ka/ks value for each
   d_resampled = d[indices,]
   d_summarised = d_resampled %>% 
@@ -392,10 +508,14 @@ ka_ks_gene_boot = function(d, indices) {
         rename(all_names = gene_name) %>% 
         rename(gene_name = actual_gene_name) %>% 
         select(-all_names) %>% 
-        mutate(
+        { if (summarised == FALSE) mutate(., 
           sample_group = str_extract(sample, '^[A-Z]{2}'),
           sample_type = str_extract(sample, '[05]$')
-        ) %>% 
+        ) else . } %>% 
+        { if (summarised == TRUE) mutate(., 
+          sample_group = 'all',
+          sample_type = str_extract(sample, '[05]$')
+        ) else .} %>% 
         filter(
           sample_group == current_sample_group,
           sample_type == current_sample_type
@@ -436,10 +556,11 @@ ka_ks_gene_boot = function(d, indices) {
 ### Calculating confidence intervals
 
 ```{r}
-get_expressed_cis = function(d, rep_count) {
+get_expressed_cis = function(d, rep_count, summarised = FALSE) {
   tic(msg = paste('bootstrap for', unique(d$sample_factor)))
   message(paste('starting', unique(d$sample_factor)))
-  boot_obj = boot(data = d, statistic = ka_ks_gene_boot, R = rep_count)
+  boot_obj = boot(data = d, statistic = ka_ks_gene_boot, 
+                  summarised = summarised, R = rep_count)
   ci_obj = boot.ci(boot_obj, type = 'bca')$bca[c(4,5)] # lower and upper bounds
   out = data.frame(
     sample_group = unique(d$sample_group),
@@ -461,6 +582,7 @@ expressed_set_cis = muts_described_expressed %>%
 expressed_set_cis
 
 ```
+
 Joining with orig Ka/Ks values:
 
 ```{r}
@@ -472,16 +594,49 @@ ka_ks_expressed_final
 
 write_tsv(
   ka_ks_expressed_final, 
-  file = here('data/rate/ka_ks/ka_ks_expressed_final_CIs.tsv'))
+  file = here('data/rate/ka_ks/ka_ks_expressed_final_CIs.tsv')
+)
 ```
+
+Redoing this summarised across sample groups:
+
+```{r}
+expressed_set_cis_summarised = muts_described_expressed %>% 
+  mutate(sample_group = 'all', sample_factor = sample_type) %>% 
+  split(.$sample_factor) %>% 
+  map_dfr(
+    ~ get_expressed_cis(., 1000, summarised = TRUE)
+  )
+
+expressed_set_cis_summarised
+
+# joining
+expressed_set_summarised_final = expressed_ka_ks_summarised %>% 
+  full_join(expressed_set_cis_summarised, by = c('sample_type')) %>% 
+  select(sample_type, ka_ks, contains('ci'), everything())
+
+write_tsv(
+  expressed_set_summarised_final,
+  file = here('data/rate/ka_ks/ka_ks_expressed_summarised_CIs.tsv')
+)
+```
+
 
 
 # Plots
 
+## Salt MA
+
 Ka/Ks for the genome:
 
 ```{r}
+ka_ks_genome_final = read_tsv(
+  here('data/rate/ka_ks/ka_ks_genome_final_CIs.tsv'),
+  col_types = cols()
+)
+
 ka_ks_genome_final %>% 
+  mutate(sample_type = as.factor(sample_type)) %>% 
   ggplot(aes(x = sample_group, y = ka_ks, fill = sample_type)) +
   geom_bar(stat = 'identity', position = position_dodge(width = 0.9)) +
   geom_errorbar(
@@ -495,7 +650,13 @@ ka_ks_genome_final %>%
 For the expressed gene set:
 
 ```{r}
+ka_ks_expressed_final = read_tsv(
+  here('data/rate/ka_ks/ka_ks_expressed_final_CIs.tsv'),
+  col_types = cols()
+)
+
 ka_ks_expressed_final %>% 
+  mutate(sample_type = as.factor(sample_type)) %>% 
   ggplot(aes(x = sample_group, y = ka_ks, fill = sample_type)) +
   geom_bar(stat = 'identity', position = position_dodge(width = 0.9)) +
   geom_errorbar(
@@ -507,21 +668,157 @@ ka_ks_expressed_final %>%
 
 ```
 
+Summarised across sample groups:
 
+```{r}
+ka_ks_summarised_final = read_tsv(
+  here('data/rate/ka_ks/ka_ks_summarised_final_CIs.tsv'),
+  col_types = cols()
+)
 
+expressed_set_summarised_final = read_tsv(
+  here('data/rate/ka_ks/ka_ks_expressed_summarised_CIs.tsv'),
+  col_types = cols()
+)
 
+ka_ks_summarised_final %>% 
+  mutate(sample_type = as.factor(sample_type)) %>% 
+  ggplot(aes(x = sample_type, y = ka_ks, fill = sample_type)) +
+  geom_bar(stat = 'identity', position = position_dodge(width = 0.9)) +
+  geom_errorbar(
+    aes(ymin = lower_ci, ymax = upper_ci, group = sample_type),
+    position = position_dodge(width = 0.9),
+    size = 0.5, width = 0.25) +
+  theme_classic() +
+  scale_fill_viridis_d(begin = 0.5, end = 1) +
+  geom_hline(yintercept = 1, linetype = 'dashed')
+```
 
+```{r}
+expressed_set_summarised_final %>% 
+  mutate(sample_type = as.factor(sample_type)) %>% 
+  ggplot(aes(x = sample_type, y = ka_ks, fill = sample_type)) +
+  geom_bar(stat = 'identity', position = position_dodge(width = 0.9)) +
+  geom_errorbar(
+    aes(ymin = lower_ci, ymax = upper_ci, group = sample_type),
+    position = position_dodge(width = 0.9),
+    size = 0.5, width = 0.25) +
+  theme_classic() +
+  scale_fill_viridis_d(begin = 0.5, end = 1) +
+  geom_hline(yintercept = 1, linetype = 'dashed')
+```
 
+## Combined/final
 
+Load in earlier data and create combined data frame:
 
+```{r}
+ka_ks_prev = read_csv(
+  here('data/prev/all.ka_ks.CI.result.csv'),
+  col_types = cols()
+)
 
+ka_ks_final = ka_ks_prev %>% 
+  select(
+    ka_ks = observed,
+    lower_ci = lowerCI,
+    upper_ci = upperCI,
+    selection, genes
+  ) %>% 
+  bind_rows(
+    ka_ks_summarised_final %>% 
+      mutate(selection = paste('salt', sample_type)) %>% 
+      select(
+        selection, ka_ks, lower_ci, upper_ci) %>% 
+      mutate(genes = 'genome wide')
+  ) %>% 
+  bind_rows(
+    expressed_set_summarised_final %>% 
+      mutate(selection = paste('salt', sample_type)) %>% 
+      select(
+        selection, ka_ks, lower_ci, upper_ci) %>% 
+      mutate(genes = 'expressed genes')
+  ) %>% 
+  bind_rows(
+    data.frame(
+      ka_ks = 0, lower_ci = 0, upper_ci = 0,
+      selection = c('salt 0', 'salt 5'), genes = 'salt genes'
+    )
+  ) %>% 
+  select(selection, genes, everything())
 
+ka_ks_final
+```
 
+Plot:
 
+```{r}
+palette = wes_palette(7, name = 'Darjeeling1', type = 'continuous')
 
-
-
-
-
-
+# relevel
+ka_ks_final %>% 
+  mutate(
+    genes = fct_relevel(
+      genes, c('genome wide', 'expressed genes', 'salt genes'))) %>% 
+  mutate(
+    selection = case_when(
+      selection == 'salt 0' ~ 'Salt MA (control)',
+      selection == 'salt 5' ~ 'Salt MA (salt)',
+      selection == 'MA' ~ 'MA lines',
+      selection == 'salt-selection' ~ 'HS lines')) %>% 
+  mutate(
+    selection = fct_relevel(
+      selection, c('MA lines', 'HS lines', 'Salt MA (control)', 'Salt MA (salt)'))) %>% 
+  
+  # plot
+  ggplot(
+    aes(x = selection, y = ka_ks, fill = selection)
+  ) +
+  geom_bar(
+    stat = 'identity',
+    color = 'black',
+    size = 0.4
+  ) +
+  geom_errorbar(
+    aes(ymin = lower_ci, ymax = upper_ci),
+    size = 0.4, width = 0.2
+  ) +
+  geom_hline(
+    yintercept = 1,
+    linetype = 'dashed',
+    size = 0.5,
+    alpha = 1,
+    color = 'black'
+  ) +
+  facet_wrap(
+    vars(genes)
+  ) +
+  labs(
+    x = '',
+    y = expression(paste(K[a] / K[s], ' ratio'))
+  ) +
+  theme(
+    panel.border = element_rect(colour = 'black', size = 0.5, fill = NA),
+    panel.background = element_blank(),
+    strip.background = element_blank(),
+    legend.position = c(0.85, 0.8),
+    legend.text = element_text(size = 8, colour = 'black'),
+    legend.title = element_blank(),
+    legend.key = element_rect(color = 'white'),
+    legend.key.size = unit(0.5, 'cm')) +
+  # text elements
+  theme(
+    strip.text = element_text(family = 'Helvetica', colour = 'black', size = 10),
+    axis.title = element_text(family = 'Helvetica', colour = 'black', size = 10),
+    axis.text = element_text(family = 'Helvetica', colour = 'black', size = 10),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  ) +
+  scale_fill_manual(
+    values = palette[c(3, 4, 6, 7)]
+  ) +
+  scale_y_continuous(
+    breaks = seq(0, 3, 0.5)
+  )
+  
+```
 
