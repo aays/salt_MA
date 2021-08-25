@@ -20,7 +20,15 @@ library(patchwork)
 muts_raw = read_tsv(
   here('data/mutations/mut_describer/muts_described.final.tsv'),
   col_types = cols()
-)
+) %>% 
+  bind_rows(
+    read_tsv(
+      here('data/mutations/mut_describer/indels_described.tsv'),
+      col_types = cols()
+    ) %>% 
+      mutate(mut_codon = as.character(mut_codon),
+             rho = as.character(rho))
+  )
 
 muts_clean = muts_raw %>% 
   
@@ -179,10 +187,11 @@ ks.test(
 ### Between sample groups
 
 ```{r}
+# both of these are significant!
 ks.test(
   muts_line_group %>% filter(sample_group == 'CC', line == 0) %>% select(d) %>% unlist(),
   muts_line_group %>% filter(sample_group == 'DL', line == 0) %>% select(d) %>% unlist()
-)
+) 
 
 ks.test(
   muts_line_group %>% filter(sample_group == 'CC', line == 5) %>% select(d) %>% unlist(),
@@ -334,6 +343,8 @@ final_distances = muts_line %>%
   )
   
 
+# final_distances = read_tsv(here('data/plots/fig_4a_distances.tsv'), col_types = cols())
+
 distance_cdf_plot = final_distances %>% 
   ggplot(
     aes(x = log10(d), color = site_type)) +
@@ -360,7 +371,8 @@ distance_cdf_plot = final_distances %>%
     axis.line = element_line(size = 0.5, color = 'black'),
     axis.ticks = element_line(size = 0.5, color = 'black'),
     axis.title = element_text(family = 'Helvetica', size = 12, color = 'black'),
-    axis.text = element_text(family = 'Helvetica', size = 12, color = 'black')
+    axis.text = element_text(family = 'Helvetica', size = 12, color = 'black'),
+    axis.text.x = element_blank() # x axis will be in lower facet
   )
 
 distance_cdf_plot
@@ -419,11 +431,16 @@ final_distances_density = bind_rows(
   final_distances_missing
 ) %>% 
   arrange(site_type, bin)
+
+# write_tsv(final_distances, here('data/plots/fig_4a_distances.tsv'))
+# write_tsv(final_distances_density, here('data/plots/fig_4b_density.tsv'))
 ```
   
 Density barplot:
 
 ```{r}
+# final_distances_density = read_tsv(here('data/plots/fig_4b_density.tsv'), col_types = cols())
+
 distance_density_plot = final_distances_density %>% 
   ggplot(
     aes(x = bin, y = density, fill = site_type)
@@ -461,18 +478,4 @@ Combining the two:
 distance_cdf_plot + distance_density_plot +
   plot_layout(nrow = 2, ncol = 1)
 ```
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
