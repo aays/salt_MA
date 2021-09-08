@@ -311,7 +311,27 @@ ks.test(
   adaptation_silent$d, adaptation_nonsilent$d
 )
 
-# TODO: between saltMA and adaptation/original MA
+# between salt MA and adaptation silent
+ks.test(
+  muts_line %>% filter(line == 0) %>% select(d) %>% unlist(),
+  adaptation_silent$d
+)
+
+ks.test(
+  muts_line %>% filter(line == 5) %>% select(d) %>% unlist(),
+  adaptation_silent$d
+)
+
+# between salt MA and adaptation nonsilent
+ks.test(
+  muts_line %>% filter(line == 0) %>% select(d) %>% unlist(),
+  adaptation_nonsilent$d
+)
+
+ks.test(
+  muts_line %>% filter(line == 5) %>% select(d) %>% unlist(),
+  adaptation_nonsilent$d
+)
 ```
 
 # Final combined plot
@@ -457,7 +477,8 @@ distance_density_plot = final_distances_density %>%
   labs(
     x = expression(
       paste('Intermutation distance (', log[10], ' bp)')),
-    y = 'Proportion'
+    y = 'Proportion',
+    tag = 'B'
   ) +
   # legend styling
   theme(
@@ -475,7 +496,11 @@ distance_density_plot
 Combining the two:
 
 ```{r}
-distance_cdf_plot + distance_density_plot +
+fig_4 = distance_cdf_plot + distance_density_plot +
   plot_layout(nrow = 2, ncol = 1)
+
+fig_4
+
+ggsave(here('plots/fig_4.eps'), plot = fig_4)
 ```
 

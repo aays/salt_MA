@@ -1032,6 +1032,9 @@ gene_set_counts = append(
     .id = 'sample_factor'
   )
 )
+
+gene_set_counts$salt_0 = gene_set_counts$CC_0 + gene_set_counts$DL_0 + gene_set_counts$SL_0
+gene_set_counts$salt_5 = gene_set_counts$CC_5 + gene_set_counts$DL_5 + gene_set_counts$SL_5
 ```
 
 expressed n_expressed_d1 n_expressed_d2
@@ -1096,6 +1099,61 @@ for (sample_type in list('CC', 'DL', 'SL')) {
     sample_0[c('perrineau', 'total')], sample_5[c('perrineau', 'total')]
   ))
 }
+```
+
+Between 0, 5, and the previous datasets:
+
+```{r}
+# expressed genes - 0 vs 5
+names_x = c('salt_0', 'salt_5')
+names_y = c('ma_orig', 'adaptation_silent', 'adaptation_nonsilent')
+
+for (name_1 in names_x) {
+  d1 = gene_set_counts[[name_1]]
+  for (name_2 in names_y) {
+    d2 = gene_set_counts[[name_2]]
+    message(paste('expressed', name_1, name_2))
+    print(do_chisq(
+      d1[c('expressed', 'total')],
+      d2[c('expressed', 'total')]
+    ))
+    message(paste('perrineau', name_1, name_2))
+    print(do_chisq(
+      d1[c('perrineau', 'total')],
+      d2[c('perrineau', 'total')]
+    ))
+  }
+}
+```
+
+
+```{r}
+message('expressed genes, salt 0 vs 5')
+do_chisq(
+  gene_set_counts$salt_0[c('expressed', 'total')],
+  gene_set_counts$salt_5[c('expressed', 'total')]
+)
+
+# Perrineau genes - MA vs HS
+message('Perrineau genes, MA vs HS')
+do_chisq(
+  gene_set_counts$salt_0[c('perrineau', 'total')],
+  gene_set_counts$salt_5[c('perrineau', 'total')]
+)
+
+# expressed genes - 0 vs MA
+message('expressed genes, salt 0 vs MA')
+do_chisq(
+  gene_set_counts$salt_0[c('expressed', 'total')],
+  gene_set_counts$ma_orig[c('expressed', 'total')]
+)
+
+# Perrineau genes - 0 vs MA
+message('Perrineau genes, salt 0 vs MA')
+do_chisq(
+  gene_set_counts$salt_0[c('perrineau', 'total')],
+  gene_set_counts$ma_orig[c('perrineau', 'total')]
+)
 ```
 
 
