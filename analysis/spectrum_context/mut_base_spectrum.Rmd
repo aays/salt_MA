@@ -36,6 +36,27 @@ adaptation <- read_csv(
 ) %>% 
   filter(type == 'SNP')
 
+# callables files
+base_callables = read_tsv(
+  here('data/rate/base_callables.tsv'),
+  col_types = cols()
+)
+
+ma_callables = read_tsv(
+  here('data/rate/MA_base_callables.tsv'),
+  col_types = cols()
+)
+
+hs_callables = read_tsv(
+  here('data/rate/HS_base_callables.tsv'),
+  col_types = cols()
+)
+
+hs_callables_silent = read_tsv(
+  here('data/rate/HS_base_callables_silent.tsv'),
+  col_types = cols()
+)
+
 ```
 
 # Mutational base spectrum
@@ -101,6 +122,7 @@ splice_sites = data.frame(
 
 # adding a silent/nonsilent column to the adaptation data frame
 adaptation_silent_nonsilent = adaptation %>% 
+  filter(utr5 == 0, utr3 == 0) %>% 
   mutate(site_type = case_when(
     Nonsyn_V_Syn != 'synonymous' & intronic == 0 & intergenic == 0 ~ 'nonsilent',
     Nonsyn_V_Syn == 'synonymous' | intronic == 1 | intergenic == 1 ~ 'silent'
@@ -135,8 +157,8 @@ get_counts = function(d) {
 count_table = list(
     # salt_nonsilent = salt %>% filter(nonsyn_v_syn != 'nonsynonymous'), 
     # salt_silent = salt %>% filter(nonsyn_v_syn == 'synonymous'),
-    salt_0 = salt %>% filter(sample_type == '0'),
-    salt_5 = salt %>% filter(sample_type == '5'),
+    salt_0 = salt %>% filter(sample_type == '0', mutant_sample != 'DL51_0'),
+    salt_5 = salt %>% filter(sample_type == '5', mutant_sample != 'DL51_5'),
     ma = ma, 
     # adaptation = adaptation
     adaptation_nonsilent = adaptation_silent_nonsilent %>% filter(site_type == 'nonsilent'),
@@ -224,7 +246,170 @@ obs_exp_salt
   
 ```
 
+## Calculate mutation spectrum relative to callables
+
+Salt MA:
+
+```{r}
+base_callables_long = base_callables %>% 
+  
+  # summarise by sample factor
+  mutate(
+    sample_group = str_extract(sample, '^[A-Z]{2}'),
+    sample_type = str_extract(sample, '[05]$'),
+    sample_factor = paste(sample_group, sample_type, sep = '_')
+  ) %>% 
+  group_by(sample_factor) %>% 
+  summarise(
+    across(where(is.numeric), sum)
+  ) %>% 
+  
+  # pivot to long format for join
+  pivot_longer(
+    cols = where(is.numeric), 
+    names_to = 'base', values_to = 'callables'
+  ) %>% 
+  mutate(
+    base = str_extract(base, '^[A-Z]')
+  )
+
+# nts: these callable values have the mutations 'baked in'
+# e.g. if there were 10 C mutations in CC_0, then the C callables are inflated by 10
+# unlikely to hugely sway the results, but will need to correct for this down the line
+
+# join to mutation counts
+salt_group_rate = salt_group_table %>% 
+  rename(sample_factor = name) %>% 
+  mutate(
+    base = str_extract(type, '^[A-Z]{1}')
+  ) %>% 
+  
+  # join
+  left_join(
+    base_callables_long, by = c('sample_factor', 'base')
+  ) %>% 
+  
+  # get rate
+  mutate(
+    rate = count / callables
+  )
+
+salt_group_rate
+```
+
+Summarised over 0 and 5:
+
+```{r}
+base_callables_summarised = base_callables_long %>% 
+  mutate(
+    sample_type = str_extract(sample_factor, '[05]$')
+  ) %>% 
+  group_by(base, sample_type) %>% 
+  summarise(callables = sum(callables))
+  
+salt_rate_summarised = salt_group_table %>% 
+  mutate(
+    base = str_extract(type, '^[AGCT]{1}'),
+    sample_type = str_extract(name, '[05]$')
+  ) %>% 
+  group_by(sample_type, base, type) %>% 
+  summarise(count = sum(count), .groups = 'drop') %>% 
+  left_join(
+    base_callables_summarised,
+    by = c('sample_type', 'base')) %>% 
+  mutate(rate = count / callables)
+
+salt_rate_summarised
+```
+
+Original MA and adaptation:
+
+```{r}
+transform_callables = function(d, sample_factor_name) {
+  d %>% 
+    
+    mutate(sample_factor = sample_factor_name) %>% 
+    group_by(sample_factor) %>% 
+    summarise(
+      across(where(is.numeric), sum)
+    ) %>% 
+    
+    # pivot to long format for join
+    pivot_longer(
+      cols = where(is.numeric), 
+      names_to = 'base', values_to = 'callables'
+    ) %>% 
+    mutate(
+      base = str_extract(base, '^[A-Z]')
+    )
+}
+
+ma_callables_long = transform_callables(ma_callables, 'ma')
+# hs_callables_long = transform_callables(hs_callables, 'adaptation') # this is combined
+hs_callables_long_silent = transform_callables(
+  hs_callables_silent %>% filter(type == 'silent'), 'adaptation_silent')
+hs_callables_long_nonsilent = transform_callables(
+  hs_callables_silent %>% filter(type == 'nonsilent'), 'adaptation_nonsilent')
+
+
+```
+
+Combining the mut counts with callables:
+
+```{r}
+rate_summarised = list()
+
+make_final_count_table = function(d, d_callables, sample_factor_name) {
+  d %>% 
+    filter(name == sample_factor_name) %>% 
+    rename(sample_factor = name) %>% 
+    mutate(
+      base = str_extract(type, '^[A-Z]{1}')
+    ) %>% 
+    
+    # join
+    left_join(
+      d_callables, by = c('sample_factor', 'base')
+    ) %>% 
+    
+    # get rate
+    mutate(
+      rate = count / callables
+    )
+}
+
+rate_summarised$ma = make_final_count_table(count_table, ma_callables_long, 'ma') %>% 
+  mutate(callables = callables * 940 * 6) %>%  # mean gens in these lines
+  mutate(rate = count / callables)
+rate_summarised$hs_silent = make_final_count_table(count_table, hs_callables_long_silent, 'adaptation_silent')
+rate_summarised$hs_nonsilent = make_final_count_table(count_table, hs_callables_long_nonsilent, 'adaptation_nonsilent')
+
+rate_summarised$salt_0 = make_final_count_table(
+  count_table, 
+  base_callables_summarised %>% 
+    mutate(sample_factor = paste('salt', sample_type, sep = '_')) %>% 
+    filter(sample_factor == 'salt_0') %>% 
+    select(-sample_type),
+  'salt_0')
+rate_summarised$salt_5 = make_final_count_table(
+  count_table, 
+  base_callables_summarised %>% 
+    mutate(sample_factor = paste('salt', sample_type, sep = '_')) %>% 
+    filter(sample_factor == 'salt_5') %>% 
+    select(-sample_type),
+  'salt_5')
+
+rate_summarised
+
+rate_summarised_combined = map_df(rate_summarised, bind_rows)
+
+```
+
+
+
 ## Plots
+
+### Counts
 
 ```{r}
 obs_exp %>% 
@@ -316,6 +501,212 @@ ggplot(
 
 ```
 
+### Rates
+
+Rate plot:
+
+```{r}
+palette = wes_palette(12, name = 'Darjeeling1', type = 'continuous')
+
+salt_group_rate %>% 
+  mutate(
+    type = str_replace(type, '>', ' \u2192 ')) %>% 
+ggplot(
+  aes(x = type, y = rate, fill = sample_factor)) +
+  geom_bar(
+    stat = 'identity', 
+    position = position_dodge(),
+    color = 'black') +
+  theme_classic() +
+  labs(
+    x = 'Base change type',
+    y = 'Mutation rate'
+  ) +
+  theme(
+    axis.text = element_text(size = 12, color = 'black'),
+    axis.title = element_text(size = 12, color = 'black'),
+    legend.title = element_blank(),
+    # legend.position = c(0.2, 0.88),
+    legend.position = 'top',
+    legend.background = element_blank(),
+    legend.text = element_text(size = 10, color = 'black')
+  ) +
+  guides(
+    fill = guide_legend(ncol = 3, nrow = 2)
+  ) +
+  scale_fill_manual(
+    values = c(palette[4], palette[5], # CC
+               palette[7], palette[9], # DL 
+               palette[11], palette[12])) # SL
+```
+
+Summarised over 0 and 5:
+
+```{r}
+palette = wes_palette(12, name = 'Darjeeling1', type = 'continuous')
+
+salt_rate_summarised %>% 
+  mutate(
+    type = str_replace(type, '>', ' \u2192 ')) %>% 
+ggplot(
+  aes(x = type, y = rate, fill = sample_type)) +
+  geom_bar(
+    stat = 'identity', 
+    position = position_dodge(),
+    color = 'black') +
+  theme_classic() +
+  labs(
+    x = 'Base change type',
+    y = 'Rate'
+  ) +
+  theme(
+    axis.text = element_text(size = 12, color = 'black'),
+    axis.title = element_text(size = 12, color = 'black'),
+    legend.title = element_blank(),
+    # legend.position = c(0.2, 0.88),
+    legend.position = 'top',
+    legend.background = element_blank(),
+    legend.text = element_text(size = 10, color = 'black')
+  ) +
+  guides(
+    fill = guide_legend(ncol = 3, nrow = 2)
+  ) +
+  scale_fill_manual(
+    values = c(palette[11], palette[12])) 
+
+```
+
+Overall, including MA/HS/saltMA:
+
+```{r}
+palette = wes_palette(12, name = 'Darjeeling1', type = 'continuous')
+
+rate_summarised_combined %>% 
+  mutate(
+    sample_factor = case_when(
+      sample_factor == 'adaptation_nonsilent' ~ 'HS lines (non-silent sites)',
+      sample_factor == 'adaptation_silent' ~ 'HS lines (silent sites)',
+      sample_factor == 'ma' ~ 'MA',
+      sample_factor == 'salt_0' ~ 'Salt MA (control)',
+      sample_factor == 'salt_5' ~ 'Salt MA (salt)'
+    )) %>% 
+  mutate(
+    sample_factor = fct_relevel(sample_factor, 
+      c('MA', 'HS lines (non-silent sites)', 'HS lines (silent sites)', 
+        'Salt MA (control)', 'Salt MA (salt)'))
+  ) %>% 
+  mutate(
+    type = str_replace(type, '>', ' \u2192 ')) %>% 
+  
+ggplot(
+  aes(x = type, y = rate, fill = sample_factor)) +
+  geom_bar(
+    stat = 'identity', 
+    position = position_dodge(),
+    color = 'black') +
+  theme_classic() +
+  labs(
+    x = 'Base change type',
+    y = 'Rate'
+  ) +
+  theme(
+    axis.text = element_text(size = 12, color = 'black'),
+    axis.title = element_text(size = 12, color = 'black'),
+    legend.title = element_blank(),
+    # legend.position = c(0.2, 0.88),
+    legend.position = 'top',
+    legend.background = element_blank(),
+    legend.text = element_text(size = 10, color = 'black')
+  ) +
+  guides(
+    fill = guide_legend(ncol = 3, nrow = 2)
+  ) +
+  scale_fill_manual(values = wes_palette(7, name = 'Darjeeling1', type = 'continuous')[3:7]) +
+  scale_y_log10(breaks = scales::trans_breaks("log10", function(x) 10^x), 
+                labels = scales::trans_format("log10", scales::math_format(10^.x)))
+  # scale_y_continuous(breaks = scales::log10_trans())
+  # scale_y_continuous(trans = 'log10') +
+  
+# TODO: an obs/exp kind of deal? would that not be the same plot as above though
+
+
+
+```
+
+Observed over expected - 
+
+```{r}
+rate_obs_exp = rate_summarised_combined %>% 
+  rename(obs_rate = rate) %>% 
+  
+  # get exp count
+  group_by(sample_factor, base) %>% 
+  mutate(exp_muts = round(sum(count) / 3)) %>% 
+  mutate(exp_rate = exp_muts / callables) %>% 
+  
+  # get obs/exp and reorder
+  mutate(obs_exp = obs_rate / exp_rate) %>% 
+  select(sample_factor, type, obs_exp, everything())
+
+rate_obs_exp
+```
+
+Obs/exp plot:
+
+```{r}
+rate_obs_exp %>% 
+  mutate(
+    sample_factor = factor(case_when(
+      sample_factor == 'adaptation_nonsilent' ~ 'HS lines (non-silent sites)',
+      sample_factor == 'adaptation_silent' ~ 'HS lines (silent sites)',
+      sample_factor == 'ma' ~ 'MA',
+      sample_factor == 'salt_0' ~ 'Salt MA (control)',
+      sample_factor == 'salt_5' ~ 'Salt MA (salt)'
+    ))) %>% 
+  mutate(
+    sample_factor = fct_relevel(sample_factor, 
+      c('MA', 'HS lines (non-silent sites)', 'HS lines (silent sites)', 
+        'Salt MA (control)', 'Salt MA (salt)'))
+  ) %>% 
+  mutate(
+    type = str_replace(type, '>', ' \u2192 ')) %>% 
+  
+  ggplot(
+    aes(x = type, y = obs_exp, fill = sample_factor)
+  ) +
+  geom_bar(
+    stat = 'identity',
+    position = 'dodge',
+    colour = 'black'
+  ) +
+  geom_hline(aes(yintercept = 1), linetype = 'dashed') +
+  coord_cartesian(
+    y = c(0, 2.5)
+  ) +
+  theme_classic() +
+  labs(
+    x = 'Base change type',
+    y = 'Observed over expected'
+  ) +
+  theme(
+    axis.text = element_text(size = 12, color = 'black'),
+    axis.title = element_text(size = 12, color = 'black'),
+    legend.title = element_blank(),
+    # legend.position = c(0.2, 0.88),
+    legend.position = 'top',
+    legend.background = element_blank(),
+    legend.text = element_text(size = 10, color = 'black')
+  ) +
+  guides(
+    fill = guide_legend(ncol = 2, nrow = 3)
+  ) +
+  scale_fill_manual(values = wes_palette(7, name = 'Darjeeling1', type = 'continuous')[3:7])
+
+# looks the exact same 
+```
+
+
+
 # Equilibrium GC content
 
 $$ \frac{n_{AT -> GC}}{n_{GC -> AT} + n_{AT -> GC}} $$
@@ -377,7 +768,7 @@ get_eq_gc(ma)
 get_eq_gc(adaptation_silent_nonsilent %>% filter(site_type == 'silent'), silent = TRUE)
 
 map(
-  salt %>% split(.$sample_factor),
+  salt %>% split(.$sample_type),
   ~ get_eq_gc(.)
 )
 ```
@@ -407,9 +798,9 @@ as.numeric(adaptation_silent_values['n_sw'] / adaptation_silent_values['n_ws']) 
 message('adaptation nonsilent')
 as.numeric(adaptation_nonsilent_values['n_sw'] / adaptation_silent_values['n_ws']) # nonsilent - 3.75
 
-# salt ma - across all factors
+# salt ma - across both types
 map(
-  salt %>% split(.$sample_factor),
+  salt %>% split(.$sample_type),
   function(d) {
     vals = get_eq_gc(d, values = TRUE)
     mut_ratio = vals['n_sw'] / vals['n_ws']
@@ -454,6 +845,13 @@ ts_tv(adaptation_silent_nonsilent)
 ts_tv(adaptation_silent_nonsilent %>% filter(site_type == 'silent'))
 ts_tv(adaptation_silent_nonsilent %>% filter(site_type == 'nonsilent'))
 
+message('salt_summarised')
+map(
+  salt %>% 
+    split(.$sample_type),
+  ~ ts_tv(.)
+)
+
 message('salt_ma')
 map(
   salt %>% 
@@ -475,7 +873,8 @@ d_list = list(
   'adaptation_silent' = adaptation_silent_nonsilent %>% filter(site_type == 'silent'),
   'adaptation_nonsilent' = adaptation_silent_nonsilent %>% filter(site_type == 'nonsilent'))
 
-salt_list = salt %>% split(.$sample_factor)
+# salt_list = salt %>% split(.$sample_factor)
+salt_list = salt %>% split(.$sample_type)
 
 d_list = append(d_list, salt_list)
 
