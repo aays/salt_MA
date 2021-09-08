@@ -500,6 +500,87 @@ with open('data/rate/orig_MA_base_callables.tsv', 'r') as f_in:
 
 looks good - removing the old dataset and then taking this to RStudio
 
+## 27/8/2021
+
+shoot - I forgot I needed separate base callables for HS silent sites
+and non-silent sites
+
+```python
+import os
+import csv
+import pysam
+from glob import glob
+from cyvcf2 import VCF
+from tqdm import tqdm
+
+scaffolds = [f'chromosome_{i}' for i in range(1, 18)]
+scaffolds.extend([f'scaffold_{i}' for i in range(18, 55)])
+scaffolds.extend(['cpDNA', 'mtDNA'])
+
+reader = VCF('../alignments/genotyping/unified_genotyper/UG_diploid/salt/salt_aligned_salt_UG_diploid.vcf.gz'
+samples = reader.samples
+
+def create_lookup(scaffold):
+    ant_reader = pysam.TabixFile('data/references/annotation_table.txt.gz')
+    ant_header = ant_reader.header[-1].split('\t')
+    lookup = ''
+    intronic_idx = ant_header.index('intronic')
+    intergenic_idx = ant_header.index('intergenic')
+    degen_idx = ant_header.index('degen')
+
+    for record in tqdm(ant_reader.fetch(scaffold), desc=f'{scaffold} lookup'):
+        line = record.split('\t')
+        if line[intronic_idx] == '1' or line[intergenic_idx] == '1':
+            lookup += 's'
+        elif line[degen_idx][0] == '4' and line[degen_idx][0] == line[degen_idx][-1]:
+            lookup += 's'
+        else:
+            lookup += 'n'
+    return lookup
+
+with open('data/rate/HS_base_callables_silent.tsv', 'w') as f:
+    fieldnames = ['type', 'sample', 'chromosome', 'A_count', 'C_count', 'G_count', 'T_count', 'N_count']
+    writer = csv.DictWriter(f, delimiter='\t', fieldnames=fieldnames)
+    writer.writeheader()
+
+    for scaffold in scaffolds:
+        silent_sample_dict = {k: {'A': 0, 'T': 0, 'C': 0, 'G': 0, 'N': 0}
+            for k in samples}
+        nonsilent_sample_dict = {k: {'A': 0, 'T': 0, 'C': 0, 'G': 0, 'N': 0}
+            for k in samples}
+        lookup = create_lookup(scaffold)
+        for record in tqdm(reader(scaffold), desc=f'{scaffold}'):
+            pos = record.POS - 1
+            for i, sample in enumerate(samples):
+                base = record.gt_bases[i]
+                if '.' in base:
+                    continue
+                if not len(set(base.split('/'))) == 1:
+                    continue
+                if not max([len(call) for call in base.split('/')]) == 1:
+                    continue
+                if lookup[pos] == 's':
+                    silent_sample_dict[sample][base.split('/')[0]] += 1
+                elif lookup[pos] == 'n':
+                    nonsilent_sample_dict[sample][base.split('/')[0]] += 1
+        for sample in samples:
+            silent_out_dict = {'type': 'silent', 
+                'sample': sample, 'chromosome': scaffold,
+                'A_count': silent_sample_dict[sample]['A'],
+                'C_count': silent_sample_dict[sample]['C'],
+                'G_count': silent_sample_dict[sample]['G'],
+                'T_count': silent_sample_dict[sample]['T'],
+                'N_count': silent_sample_dict[sample]['N']}
+            nonsilent_out_dict = {'type': 'nonsilent', 
+                'sample': sample, 'chromosome': scaffold,
+                'A_count': nonsilent_sample_dict[sample]['A'],
+                'C_count': nonsilent_sample_dict[sample]['C'],
+                'G_count': nonsilent_sample_dict[sample]['G'],
+                'T_count': nonsilent_sample_dict[sample]['T'],
+                'N_count': nonsilent_sample_dict[sample]['N']}
+            writer.writerow(silent_out_dict)
+            writer.writerow(nonsilent_out_dict)
+```
 
 
 
