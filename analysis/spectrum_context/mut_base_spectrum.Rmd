@@ -36,26 +36,41 @@ adaptation <- read_csv(
 ) %>% 
   filter(type == 'SNP')
 
+# fxn to collapse callables - e.g. A and T should just be A
+collapse_callables = function(d) {
+  d_out = d %>% 
+    mutate(
+      A_count = A_count + T_count,
+      C_count = C_count + G_count
+    ) %>% 
+    select(-T_count, -G_count)
+  return(d_out)
+}
+
 # callables files
 base_callables = read_tsv(
   here('data/rate/base_callables.tsv'),
   col_types = cols()
-)
+) %>% 
+  collapse_callables()
 
 ma_callables = read_tsv(
   here('data/rate/MA_base_callables.tsv'),
   col_types = cols()
-)
+) %>% 
+  collapse_callables()
 
 hs_callables = read_tsv(
   here('data/rate/HS_base_callables.tsv'),
   col_types = cols()
-)
+) %>% 
+  collapse_callables()
 
 hs_callables_silent = read_tsv(
   here('data/rate/HS_base_callables_silent.tsv'),
   col_types = cols()
-)
+) %>% 
+  collapse_callables()
 
 ```
 
@@ -160,9 +175,9 @@ count_table = list(
     salt_0 = salt %>% filter(sample_type == '0', mutant_sample != 'DL51_0'),
     salt_5 = salt %>% filter(sample_type == '5', mutant_sample != 'DL51_5'),
     ma = ma, 
-    # adaptation = adaptation
-    adaptation_nonsilent = adaptation_silent_nonsilent %>% filter(site_type == 'nonsilent'),
-    adaptation_silent = adaptation_silent_nonsilent %>% filter(site_type == 'silent')
+    adaptation = adaptation
+    # adaptation_nonsilent = adaptation_silent_nonsilent %>% filter(site_type == 'nonsilent'),
+    # adaptation_silent = adaptation_silent_nonsilent %>% filter(site_type == 'silent')
   ) %>% 
   map_dfr(., get_counts, .id = 'name')
 
@@ -275,7 +290,7 @@ base_callables_long = base_callables %>%
 
 # nts: these callable values have the mutations 'baked in'
 # e.g. if there were 10 C mutations in CC_0, then the C callables are inflated by 10
-# unlikely to hugely sway the results, but will need to correct for this down the line
+# unlikely to hugely sway the results, but may need to correct for this down the line
 
 # join to mutation counts
 salt_group_rate = salt_group_table %>% 
@@ -317,9 +332,10 @@ salt_rate_summarised = salt_group_table %>%
   left_join(
     base_callables_summarised,
     by = c('sample_type', 'base')) %>% 
-  mutate(rate = count / callables)
+  mutate(rate = count / (callables * 250)) # sample count is baked in
 
 salt_rate_summarised
+# TODO: update site gen count once actual generation count is in
 ```
 
 Original MA and adaptation:
@@ -345,11 +361,12 @@ transform_callables = function(d, sample_factor_name) {
 }
 
 ma_callables_long = transform_callables(ma_callables, 'ma')
-# hs_callables_long = transform_callables(hs_callables, 'adaptation') # this is combined
-hs_callables_long_silent = transform_callables(
-  hs_callables_silent %>% filter(type == 'silent'), 'adaptation_silent')
-hs_callables_long_nonsilent = transform_callables(
-  hs_callables_silent %>% filter(type == 'nonsilent'), 'adaptation_nonsilent')
+hs_callables_long = transform_callables(hs_callables, 'adaptation') # this is combined
+
+# hs_callables_long_silent = transform_callables(
+  # hs_callables_silent %>% filter(type == 'silent'), 'adaptation_silent')
+# hs_callables_long_nonsilent = transform_callables(
+  # hs_callables_silent %>% filter(type == 'nonsilent'), 'adaptation_nonsilent')
 
 
 ```
@@ -378,25 +395,32 @@ make_final_count_table = function(d, d_callables, sample_factor_name) {
     )
 }
 
+# MA - average of 940 gens across all lines
 rate_summarised$ma = make_final_count_table(count_table, ma_callables_long, 'ma') %>% 
-  mutate(callables = callables * 940 * 6) %>%  # mean gens in these lines
+  mutate(callables = callables * 940) %>%  # mean gens in these lines
   mutate(rate = count / callables)
-rate_summarised$hs_silent = make_final_count_table(count_table, hs_callables_long_silent, 'adaptation_silent')
-rate_summarised$hs_nonsilent = make_final_count_table(count_table, hs_callables_long_nonsilent, 'adaptation_nonsilent')
 
+# HS - 150 gens since SL1 + SL2 were crossed to 2935
+rate_summarised$hs = make_final_count_table(count_table, hs_callables_long, 'adaptation') %>% 
+  mutate(callables = callables * 150) %>% 
+  mutate(rate = count / callables)
+
+# salt MA - TODO, but currently setting to 250
 rate_summarised$salt_0 = make_final_count_table(
   count_table, 
   base_callables_summarised %>% 
     mutate(sample_factor = paste('salt', sample_type, sep = '_')) %>% 
     filter(sample_factor == 'salt_0') %>% 
-    select(-sample_type),
+    select(-sample_type) %>% 
+    mutate(callables = callables * 250), # TODO: replace with exact value
   'salt_0')
 rate_summarised$salt_5 = make_final_count_table(
   count_table, 
   base_callables_summarised %>% 
     mutate(sample_factor = paste('salt', sample_type, sep = '_')) %>% 
     filter(sample_factor == 'salt_5') %>% 
-    select(-sample_type),
+    select(-sample_type) %>% 
+    mutate(callables = callables * 250), # TODO: replace with exact value
   'salt_5')
 
 rate_summarised
@@ -578,25 +602,139 @@ ggplot(
 
 Overall, including MA/HS/saltMA:
 
+Get Poisson CIs:
+
+```{r}
+get_pois_ci = function(d) {
+  count = d$count[1]
+  callables = d$callables[1]
+  lambda = d$lambda[1]
+  
+  out = broom::tidy(
+    poisson.test(
+      x = count, callables, 
+      r = lambda, conf.level = 0.95)
+  )
+  return(out)
+}
+
+rate_summarised_cis = list()
+for (sample_factor in c('ma', 'hs', 'salt_5')) {
+  rate_summarised_cis[[sample_factor]] = rate_summarised[[sample_factor]] %>% 
+    group_by(base) %>% 
+    mutate(lambda = mean(count) / callables) %>% 
+    ungroup() %>% 
+    
+    # get CIs
+    split(.$type) %>%
+    map_dfr(
+      ~ get_pois_ci(.),
+      .id = 'type'
+    )
+}
+
+rate_summarised_cis = bind_rows(
+  rate_summarised_cis, .id = 'sample_factor'
+) %>% 
+  mutate(
+    type = str_replace(type, '>', ' \u2192 ')
+  ) %>% 
+  mutate(
+    sample_factor = case_when(
+      sample_factor == 'hs' ~ 'HS lines',
+      sample_factor == 'ma' ~ 'MA',
+      sample_factor == 'salt_5' ~ 'MA in salt'
+    )) %>% 
+  mutate(
+    sample_factor = fct_relevel(sample_factor, 
+      c('MA', 'HS lines', 'MA in salt')))
+
+
+```
+
+Plot with CIs:
+
+```{r}
+rate_summarised_combined %>% 
+  filter(sample_factor != 'salt_0') %>% 
+  mutate(
+    sample_factor = case_when(
+      sample_factor == 'adaptation' ~ 'HS lines',
+      sample_factor == 'ma' ~ 'MA',
+      sample_factor == 'salt_5' ~ 'MA in salt'
+    )) %>% 
+  mutate(
+    sample_factor = fct_relevel(sample_factor, 
+      c('MA', 'HS lines', 'MA in salt'))
+  ) %>% 
+  mutate(
+    type = str_replace(type, '>', ' \u2192 ')) %>% 
+  
+ggplot(aes(fill = sample_factor)) +
+  geom_bar(
+    mapping = aes(x = type, y = log10(rate) + 12, fill = sample_factor),
+    stat = 'identity', 
+    position = position_dodge(),
+    color = 'black') +
+  geom_errorbar(
+    data = rate_summarised_cis,
+    mapping = aes(
+      x = type,
+      ymin = log10(conf.low) + 12, 
+      ymax = log10(conf.high) + 12),
+    position = position_dodge(width = 0.9),
+    width = 0.5
+  ) +
+  theme_classic() +
+  labs(
+    x = 'Base change type',
+    y = 'Rate'
+  ) +
+  theme(
+    axis.text = element_text(size = 12, color = 'black'),
+    axis.title = element_text(size = 12, color = 'black'),
+    legend.title = element_blank(),
+    # legend.position = c(0.2, 0.88),
+    legend.position = 'top',
+    legend.background = element_blank(),
+    legend.text = element_text(size = 10, color = 'black')
+  ) +
+  guides(
+    fill = guide_legend(ncol = 3, nrow = 2)
+  ) +
+  scale_fill_manual(values = wes_palette(4, name = 'Darjeeling1', type = 'continuous')[2:4]) +
+  scale_y_continuous(
+    breaks = seq(0, 4),
+    labels = c(
+      expression(10^-12), expression(10^-11), expression(10^-10),
+      expression(10^-9), expression(10^-8))
+  )
+
+```
+
+
 ```{r}
 palette = wes_palette(12, name = 'Darjeeling1', type = 'continuous')
 
 rate_summarised_combined %>% 
   mutate(
     sample_factor = case_when(
-      sample_factor == 'adaptation_nonsilent' ~ 'HS lines (non-silent sites)',
-      sample_factor == 'adaptation_silent' ~ 'HS lines (silent sites)',
+      # sample_factor == 'adaptation_nonsilent' ~ 'HS lines (non-silent sites)',
+      # sample_factor == 'adaptation_silent' ~ 'HS lines (silent sites)',
+      sample_factor == 'adaptation' ~ 'HS lines',
       sample_factor == 'ma' ~ 'MA',
       sample_factor == 'salt_0' ~ 'Salt MA (control)',
       sample_factor == 'salt_5' ~ 'Salt MA (salt)'
     )) %>% 
   mutate(
     sample_factor = fct_relevel(sample_factor, 
-      c('MA', 'HS lines (non-silent sites)', 'HS lines (silent sites)', 
-        'Salt MA (control)', 'Salt MA (salt)'))
+      c('MA', 'HS lines', 'Salt MA (control)', 'Salt MA (salt)'))
   ) %>% 
   mutate(
     type = str_replace(type, '>', ' \u2192 ')) %>% 
+  mutate(
+    rate = ifelse(sample_factor != 'MA', rate / 250, rate)
+  ) %>% 
   
 ggplot(
   aes(x = type, y = rate, fill = sample_factor)) +
@@ -621,14 +759,16 @@ ggplot(
   guides(
     fill = guide_legend(ncol = 3, nrow = 2)
   ) +
-  scale_fill_manual(values = wes_palette(7, name = 'Darjeeling1', type = 'continuous')[3:7]) +
-  scale_y_log10(breaks = scales::trans_breaks("log10", function(x) 10^x), 
-                labels = scales::trans_format("log10", scales::math_format(10^.x)))
+  scale_fill_manual(values = wes_palette(7, name = 'Darjeeling1', type = 'continuous')[3:7]) 
+  scale_y_log10(
+    breaks = scales::trans_breaks("log10", function(x) 10^x), 
+    labels = scales::trans_format("log10", scales::math_format(10^.x))) +
+  coord_cartesian(y = c(10^-12, 10^-8))
   # scale_y_continuous(breaks = scales::log10_trans())
   # scale_y_continuous(trans = 'log10') +
-  
-# TODO: an obs/exp kind of deal? would that not be the same plot as above though
 
+# TODO: Poisson-based CIs for these - num mutations + number of base-based sitegens
+# if we redid this, what's the distribution of obs mutations if we expect mean k?
 
 
 ```
