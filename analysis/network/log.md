@@ -283,3 +283,122 @@ data/network/chlamyNET.gml data/network/gene_lists/saltMA_5_gene_list.txt 1 \
 --distances -o data/network/matrices/saltMA_5.tsv
 ```
 
+## 27/10/2021
+
+today - starting on the betweenness centrality + degree analyses
+
+gene lists are in `data/network/gene_lists` - network stats to be symlinked into
+`data/network` (19530 line file, 5.5 Mb - so could work with it offline if needed)
+
+seems the best way forward is to use the gene lists to just output filtered
+versions of that file - or better yet, just get the gene lists locally
+and do the merging etc in R directly
+
+## 28/10/2021
+
+so post meeting, I'm realizing I need to make sure the shortest paths
+are always calculated using the full network - that way, I could take
+the min shortest path for any HS gene (for example) and work with that
+
+also need to look into clustering coefficients, how they relate to shortest
+paths, and if those could be used for within-network cluster discovery vs
+comparing between networks
+
+Rob also has a bootstrap significance test I could use to compare distributions
+of shortest paths, but first I need to make sure they're calculated correctly
+and then those all x all values need to be transformed so we're just working with
+the min path values
+
+## 3/11/2021
+
+update - after a multi day dive into the literature - going to be using the clustering
+coefficient instead of shortest paths, since I think it gets at the question much
+more directly
+
+need to create a script that'll take in a list of genes and return their clustering
+coefficients to a tsv file
+
+trying this out for saltMA - 
+
+```bash
+time python analysis/network/clustering_coefficients.py \
+--gene_list data/network/gene_lists/saltMA_gene_list.txt \
+--network data/network/chlamyNET.gml \
+--tag saltMA --out cluster_test.tsv
+```
+
+looks good - but just about half the genes were actually found in chlamyNET:
+
+```
+[saltMA] reading in data/network/chlamyNET.gml
+[saltMA] parsing gene list...
+[saltMA] 162 genes found of 326
+[saltMA] computing clustering coefficients
+100%|█████████████████████████████████████████████████████████████████████████████| 162/162 [00:00<00:00, 2310.50it/s]
+[saltMA] complete.
+```
+
+and I should probably keep track of these numbers moving forwards
+
+doing HS + MA + 0 and 5 separately:
+
+```bash
+for d in adaptation MA_orig saltMA_0 saltMA_5; do
+    time python analysis/network/clustering_coefficients.py \
+    --gene_list data/network/gene_lists/${d}_gene_list.txt \
+    --network data/network/chlamyNET.gml \
+    --tag ${d} --out data/network/clustering/${d}_clustering.tsv;
+done
+```
+
+done in half a minute, but:
+
+```
+[saltMA] reading in data/network/chlamyNET.gml
+[saltMA] parsing gene list...
+[saltMA] 127 genes found of 251
+[saltMA] computing clustering coefficients
+100%|█████████████████████████████████████████████████████████████████████████████| 127/127 [00:00<00:00, 1638.68it/s]
+[saltMA] complete.
+
+real    0m27.393s
+user    0m32.160s
+sys     0m7.210s
+[saltMA] reading in data/network/chlamyNET.gml
+[saltMA] parsing gene list...
+[saltMA] 2737 genes found of 6172
+[saltMA] computing clustering coefficients
+100%|███████████████████████████████████████████████████████████████████████████| 2737/2737 [00:01<00:00, 2087.03it/s]
+[saltMA] complete.
+
+real    0m28.662s
+user    0m33.779s
+sys     0m6.905s
+[saltMA] reading in data/network/chlamyNET.gml
+[saltMA] parsing gene list...
+[saltMA] 88 genes found of 162
+[saltMA] computing clustering coefficients
+100%|███████████████████████████████████████████████████████████████████████████████| 88/88 [00:00<00:00, 1092.85it/s]
+[saltMA] complete.
+
+real    0m27.861s
+user    0m33.402s
+sys     0m6.412s
+[saltMA] reading in data/network/chlamyNET.gml
+[saltMA] parsing gene list...
+[saltMA] 74 genes found of 164
+[saltMA] computing clustering coefficients
+100%|███████████████████████████████████████████████████████████████████████████████| 74/74 [00:00<00:00, 1480.45it/s]
+[saltMA] complete.
+```
+
+looks like a good number of genes are missing here - it may be worth revisiting some missing genes
+and seeing if they're listed in chlamyNET under other names
+
+a manual search of the first few not-found-genes in the adaptation and saltMA sets yields nothing -
+using the PACid doesn't change the fact that they're not in the network by the looks of it
+
+
+
+
+
