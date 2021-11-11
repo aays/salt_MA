@@ -398,7 +398,224 @@ and seeing if they're listed in chlamyNET under other names
 a manual search of the first few not-found-genes in the adaptation and saltMA sets yields nothing -
 using the PACid doesn't change the fact that they're not in the network by the looks of it
 
+wait - this should be done with subgraphs, since for a given mutated node we aren't concerned
+with whether nearby unmutated genes are clustered
 
+## 4/11/2021
 
+today - the clustering coefficient seems to be a little too limited to proximate nodes,
+and while I could look into an 'extended' coefficient I'm going to try and detect clusters
+directly instead of computing per-node metrics 
 
+seems the Louvain algorithm is the method of choice here, after which I could implement
+the qs test (Kojaku + Masuda 2018) which compares communities to randomly generated networks
+but controls for differences in community sizes
 
+installing python packages `python-louvain`/`community` and `qstest` - looks
+like the latter is on pypi only
+
+```bash
+conda install -c conda-forge python-louvain
+pip install qstest # this fails - need to get from repo and run python setup.py install
+```
+
+permutation test - create random draws from MA (without replacement)
+at the same size as the HS - do this ~100 times - compare with the distribution
+of min shortest paths from HS 
+
+could stack histograms of MA draws - the distribution should be less
+0 focused this way
+
+could do bin specific too - 'how many times is the 0-1 bin in the MA draws
+smaller than the HS dataset'? 
+
+## 5/11/2021
+
+today - actually implementing the permutation test
+
+this needs to take in both the adaptation and MA gene lists, and generate
+M subsamples of size n (where n = size of the adaptation data set) 
+before outputting all x all min shortest paths
+
+it does occur to me that we specifically care about min shortest paths - it
+might save space to _just_ report those, since otherwise the outfile will be
+millions of lines long
+
+## 7/11/2021
+
+done now - giving this a go:
+
+```bash
+python analysis/network/shortest_path_resamples.py \
+--fname data/network/gene_lists/MA_orig_gene_list.txt \
+--treatment data/network/gene_lists/adaptation_gene_list.txt \
+--gml data/network/chlamyNET.gml \
+--replicates 10 \
+--out resample_test.tsv
+```
+
+finally debugged and looking good - took 7 min for 10 iterations, which is
+on the longer side but not too bad
+
+here goes:
+
+```bash
+mkdir -p data/network/resamples
+
+python analysis/network/shortest_path_resamples.py \
+--fname data/network/gene_lists/MA_orig_gene_list.txt \
+--treatment data/network/gene_lists/adaptation_gene_list.txt \
+--gml data/network/chlamyNET.gml \
+--replicates 100 \
+--out data/network/resamples/ma_resample_100.tsv
+```
+
+although I just realized something - the original all x all shortest paths
+seemed to all have been generated using a subgraph! which isn't quite right - and so I need
+to rerun that as well
+
+```bash
+# updated to not create a subgraph and just get shortest paths from the full graph
+time python analysis/network/shortest_path.py \
+data/network/chlamyNET.gml data/network/gene_lists/adaptation_gene_list.txt 1 \
+--distances -o data/network/matrices/adaptation_full.tsv
+
+# this is an upper triangle all x all with 2025 nodes
+# will filter once again later
+time python analysis/network/shortest_path.py \
+data/network/chlamyNET.gml data/network/gene_lists/MA_orig_gene_list.txt 1 \
+--distances -o data/network/matrices/MA_orig_full.tsv
+
+cut -f1-3 data/network/matrices/MA_orig_full.tsv > data/network/matrices/MA_orig_full_light.tsv
+
+time python analysis/network/shortest_path.py \
+data/network/chlamyNET.gml data/network/gene_lists/saltMA_0_gene_list.txt 1 \
+--distances -o data/network/matrices/saltMA_0_full.tsv
+
+time python analysis/network/shortest_path.py \
+data/network/chlamyNET.gml data/network/gene_lists/saltMA_5_gene_list.txt 1 \
+--distances -o data/network/matrices/saltMA_5_full.tsv
+```
+
+strange - these seem to be the exact same outfiles as before, and I've double
+checked that the subgraph bit has been disabled. did some testing and it seems
+shortest paths are supposed to raise errors if the subgraph doesn't contain
+the requisite in between nodes -
+
+```python
+>>> for gene1 in tqdm(genes):
+...     for gene2 in genes:
+...         if gene1 != gene2:
+...             s = nx.shortest_path(G, gene1, gene2)
+...             for gene in s:
+...                 if gene not in genes:
+...                     counter += 1
+100%|████████████████████████████████████████████████████████████████████████████████| 127/127 [00:52<00:00,  2.65it/s]
+>>> counter
+92790
+
+>>> H = G.subgraph(genes)
+>>> counter2 = 0
+... for gene1 in tqdm(genes):
+...     for gene2 in genes:
+...         if gene1 != gene2:
+...             s = nx.shortest_path(H, gene1, gene2)
+...             for gene in s:
+...                 if gene not in genes:
+...                     counter2 += 1
+  0%|                                                                                          | 0/127 [00:00<?, ?it/s]
+Traceback (most recent call last):
+  File "<stdin>", line 5, in <module>
+  File "/home/hasans11/.conda/env/work/lib/python3.6/site-packages/networkx/algorithms/shortest_paths/generic.py", line 160, in shortest_path
+    paths = nx.bidirectional_shortest_path(G, source, target)
+  File "/home/hasans11/.conda/env/work/lib/python3.6/site-packages/networkx/algorithms/shortest_paths/unweighted.py", line 224, in bidirectional_shortest_path
+    results = _bidirectional_pred_succ(G, source, target)
+  File "/home/hasans11/.conda/env/work/lib/python3.6/site-packages/networkx/algorithms/shortest_paths/unweighted.py", line 292, in _bidirectional_pred_succ
+    raise nx.NetworkXNoPath(f"No path between {source} and {target}.")
+networkx.exception.NetworkXNoPath: No path between Cre01.g012700 and Cre01.g012900.
+
+No path between Cre01.g012700 and Cre01.g012900.
+>>> 'Cre01.g012900' in genes
+True
+
+```
+
+so I'm not sure why these are exactly the same, or for that matter why errors weren't raised in
+the earlier code when the subgraph was being made
+
+WAIT - I misunderstood Sara's code - the subgraph is only made if a list of nodes is provided,
+so ultimately this was still an all x all run originally - meaning I can remove the 'full' versions
+of these files
+
+alright - now to export the resampled distributions (took 70 min as expected)
+into RStudio and look at this distribution
+
+## 8/11/2021
+
+update: need to also do resamples from the _entire_ network - modifying the script accordingly:
+
+```bash
+# running without providing --fname arg
+python analysis/network/shortest_path_resamples.py \
+--treatment data/network/gene_lists/adaptation_gene_list.txt \
+--gml data/network/chlamyNET.gml \
+--replicates 100 \
+--out data/network/resamples/chlamynet_full_resample_100.tsv
+```
+
+## 9/11/2021
+
+today - downloading the metabolic network and repeating some of these analyses with it
+
+```
+# Imam et al 2015, the plant journal - 'A refined reconstruction of Chlamydomonas metabolism...'
+wget https://onlinelibrary.wiley.com/action/downloadSupplement?doi=10.1111%2Ftpj.13059&file=tpj13059-sup-0017-DataS2.tar
+```
+
+is it meaningful to use degree and BC here? degree basically tells us how many
+metabolites were involved in a reaction, while BC makes little sense to me here
+given that species point to reactions (e.g. there are no longer paths past that)
+
+```R
+> x = d %>% filter(str_detect(transcript, 'Cre17.g698000'))
+> x
+# A tibble: 1 x 30
+  transcript SFS0  gene  diffs0    k4 Cincerta_transc…     pi4 SFS4
+  <chr>      <chr> <chr>  <dbl> <dbl> <chr>              <dbl> <chr>
+1 Cre17.g69… [111… Cre1…     13 0.145 g11475.t1        0.00400 [315…
+# … with 22 more variables: aligned_sites <dbl>, sites4 <dbl>, sites0 <dbl>,
+#   pi0 <dbl>, ness_ID <dbl>, k0 <dbl>, PID <dbl>, diffs4 <dbl>,
+#   DegreechlamynetUnDirected <dbl>, OutdegreechlamynetDirected <dbl>,
+#   IndegreechlamynetUnDirected <dbl>,
+#   BetweennessCentralitychlamynetDirected <dbl>,
+#   BetweennessCentralitychlamynetUnDirected <dbl>,
+#   OutdegreechlamynetUnDirected <dbl>, IndegreechlamynetDirected <dbl>,
+#   maxDegree <dbl>, maxBC <dbl>, meanBC <dbl>, sum_product_outdegrees <dbl>,
+#   mean_product_outdegrees <dbl>, meanDegree <dbl>, transcript55 <chr>
+> x$maxDegree
+[1] 7
+> x$meanDegree
+[1] 6.5
+# one rxn has 6 metabolites, the other has 7... is that meaningful? 
+```
+
+one possible takeaway could be to get genes present in all three datasets (categorized as
+'essential' in the paper, since they're used with and without light + with and without
+external nutrients) and see whether there's more mutations in these than expected? I suppose
+that overlaps with the Perrineau/expressed analysis
+
+## 10/11/2021
+
+will revisit this earlier stuff about the metabolic network later, but for now - need
+to update the clustering coefficient script - have it output degree for a given gene
+as well as the number of triangles, so that we can investigate that spike in the adaptation
+dataset better
+
+```bash
+for d in adaptation MA_orig saltMA_0 saltMA_5 saltMA; do
+    time python analysis/network/clustering_coefficients.py \
+    --gene_list data/network/gene_lists/${d}_gene_list.txt --all_genes \
+    --network data/network/chlamyNET.gml --tag ${d} \
+    --out data/network/clustering/${d}_clustering_all.tsv;
+done
+```
