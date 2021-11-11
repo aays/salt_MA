@@ -1144,5 +1144,122 @@ with open('data/mutations/mut_describer/indels_described.tsv', 'r') as f:
 
 reran the above now that I have a 'final' indel dataset
 
+## 10/11/2021
 
+alright, one final thing - looks like we have the generation times now,
+which means I need to update the rates
+
+`calculate_rate.py` already has a generation time file input added in, because
+past me can sometimes be very good at things - the format expected is
+
+```
+sample_1 gen_time
+sample_2 gen_time
+```
+
+separated by spaces
+
+getting division counts from `data/rate/generation_time_data.txt`
+
+```R
+# in data/rate
+library(tidyverse)
+
+d = read_tsv('generation_time_data.txt')
+d %>%
+    filter(P2_Events == 0) # four outliers
+
+# increasing P2_Events by 1 to avoid 0 issues
+# removing 0 rows has marginal differences on DL40, which has 2 of the 4
+# see below for more
+d_div = d %>%
+    mutate(colony_count = (P2_Events + 1) * (100 / Volume_uL)) %>%
+    mutate(N_divisions = log(colony_count) / log(2))
+
+d_summarised = d_div %>%
+    group_by(Strain, Group, Condition, Day) %>%
+    summarise(N_divisions = mean(N_divisions))
+
+# get weighted mean of 4/5 day cycle
+d_wide = d_summarised %>%
+    pivot_wider(
+        names_from = c(Group, Condition, Day),
+        values_from = N_divisions)
+
+d_final = d_wide %>%
+    mutate(weighted_mean_0 = (2*ANC_0_DAY5) + ANC_0_DAY4 + (2*T25_0_DAY5) + T25_0_DAY4) %>%
+    mutate(weighted_mean_5 = (2*ANC_5_DAY5) + ANC_5_DAY4 + (2*T25_5_DAY5) + T25_5_DAY4) %>%
+    mutate(weighted_mean_0 = weighted_mean_0 / 6, weighted_mean_5 = weighted_mean_5 / 6)
+
+write_tsv(d_final, 'data/rate/generation_time_summarised_all.tsv')
+
+# creating a version that's compatible with the rate script - so just 0 and 5 and means
+d_final_summarised = d_final %>% # lol these object names
+    select(Strain, weighted_mean_0, weighted_mean_5) %>%
+    pivot_longer(
+        cols = contains('weighted_mean'), 
+        names_to = 'measure', values_to = 'value') %>%
+    mutate(measure = str_extract(measure, '[05]$') %>%
+    mutate(Strain = paste(Strain, measure, sep = '_')) %>%
+    select(strain = Strain, value) %>%
+    transmute(generations = round(value * 25), 2) # 25 transfers
+
+write_tsv(d_final_summarised, 'data/rate/generation_time_final.tsv', col_names = FALSE)
+```
+
+here's that bit about the effects on DL40:
+
+```R
+> d %>% filter(P2_Events == 0)
+# A tibble: 4 x 18
+  Strain Day   Group Condition Volume_uL Abort_perc All_Events P1_Events
+  <chr>  <chr> <chr>     <dbl>     <dbl>      <dbl>      <dbl>     <dbl>
+1 CC2344 DAY4  ANC           0      50.1          0        812       789
+2 DL40   DAY5  T25           5      50.2          0        177       176
+3 DL40   DAY5  T25           5      50            0        169       168
+4 DL41   DAY5  T25           5      50.1          0        193       179
+# … with 10 more variables: P2_Events <dbl>, All_Events_perc_Total <dbl>,
+#   P1_perc_Total <dbl>, P2_perc_Total <dbl>, All_Events_perc_Parent <dbl>,
+#   P1_perc_Parent <dbl>, P2_perc_Parent <dbl>, All_Events_Events_per_uL <dbl>,
+#   P1_Events_per_ul <dbl>, P2_Events_per_ul <dbl>
+> d_summarised %>% filter(Strain == 'DL40')
+# A tibble: 8 x 5
+# Groups:   Strain, Group, Condition [4]
+  Strain Group Condition Day   N_divisions
+  <chr>  <chr>     <dbl> <chr>       <dbl>
+1 DL40   ANC           0 DAY4        14.2
+2 DL40   ANC           0 DAY5        13.9
+3 DL40   ANC           5 DAY4         5.86
+4 DL40   ANC           5 DAY5         5.21
+5 DL40   T25           0 DAY4        12.2
+6 DL40   T25           0 DAY5        12.9
+7 DL40   T25           5 DAY4         6.37
+8 DL40   T25           5 DAY5         3.16
+> d_summarised2 %>% filter(Strain == 'DL40')
+# A tibble: 8 x 5
+# Groups:   Strain, Group, Condition [4]
+  Strain Group Condition Day   N_divisions
+  <chr>  <chr>     <dbl> <chr>       <dbl>
+1 DL40   ANC           0 DAY4        14.2
+2 DL40   ANC           0 DAY5        13.9
+3 DL40   ANC           5 DAY4         5.73
+4 DL40   ANC           5 DAY5         5.11
+5 DL40   T25           0 DAY4        12.2
+6 DL40   T25           0 DAY5        12.9
+7 DL40   T25           5 DAY4         6.34
+8 DL40   T25           5 DAY5         7.46
+```
+
+## 11/11/2021
+
+and now to rerun the rate script:
+
+```bash
+time python analysis/rate/calculate_rate.py \
+--mut_table data/rate/mut_describer/muts_described.final.tsv \
+--callables_table data/rate/all_callable.tsv.gz \
+--vcf data/alignments/genotyping/UG/pairs/CC1373_samples.vcf.gz \
+--generation_file data/rate/generation_time_final.tsv \
+--out data/rate/saltMA_SNM_rate_final.tsv
+```
 
