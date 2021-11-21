@@ -619,3 +619,140 @@ for d in adaptation MA_orig saltMA_0 saltMA_5 saltMA; do
     --out data/network/clustering/${d}_clustering_all.tsv;
 done
 ```
+
+## 16/11/2021
+
+so there's a huge issue in the shortest path resamples from earlier - although 127 genes
+are in the adaptation gene list, this includes duplicates, and there are really only 84
+unique genes in there (each of the gene1 and gene2 cols in that matrix file has 83, but
+this is because there's one gene in each that's not present in the other)
+
+```bash
+# running without providing --fname arg
+# bug fixed - now includes list(set()) on both gene lists
+
+python analysis/network/shortest_path_resamples.py \
+--treatment data/network/gene_lists/adaptation_gene_list.txt \
+--gml data/network/chlamyNET.gml \
+--replicates 100 \
+--out data/network/resamples/chlamynet_full_resample_100_unique.tsv
+```
+
+update - instead of dropping duplicates, going to try giving them a path value of 1
+instead - also updating the resamples script to allow replacement and to do the same
+for duplicates
+
+```bash
+# updated to avoid removing duplicates and return a path value of 1 instead
+time python analysis/network/shortest_path.py \
+data/network/chlamyNET.gml data/network/gene_lists/adaptation_gene_list.txt 1 \
+--distances -o data/network/matrices/adaptation_replacement.tsv
+```
+
+worth noting - there are lots of duplicate rows in here since if there are *m*
+and *n* muts respectively in two separate genes, their shortest paths are
+calculated m x n times - will need to filter out in RStudio
+
+next up - updating the resampling script to do the same (resample with replacement
+and set shortest paths between the same node to 1)
+
+that said... does this make sense if I'm just looking at min paths? in that
+case if a node is sampled more than once its min path is _guaranteed_ to be 1
+
+for the time being - let's just look at the resamples with the 84 unique genes
+as is (eg without replacement) above
+
+## 18/11/2021
+
+I haven't been documenting it here as much, but I think I've figured the metabolic network
+stuff out somewhat - instead of outdegrees/indegrees like we were originally thinking, it
+seems the standard here is to use something called flux balance analysis, which involves
+knocking genes in a metabolic network out in silico and then observing its effects on
+a biomass value that's calculated from previously encoded properties of the network
+
+after fighting with matlab implementations (barf) I think I've got it working
+using cobrapy - the 'model objective' needs to be set to a biomass parameter in
+the network (e.g. `Biomass_Chlamy_mixo`) and then for each gene the change in
+growth following knockout needs to be calculated
+
+in this framework, 'essential genes' are defined as genes whose knockout
+results in growth going to 0 - but that just binarizes the genes, so this is
+also extended into synthetic lethal analysis (SLA), where groups of genes are
+removed from the network at n-order analyses (where n = number of genes knocked
+out at a time) 
+
+but SLA doesn't scale very well (cobrapy allows up to n = 2 at most, lol) and
+is hard to interpret as well
+
+I might try to look at the growth rate changes from single gene knockouts and
+see if mutations tend to happen more in genes that cause greater perturbations
+if knocked out - going to have to use cobrapy to do this for every single gene,
+with something along these lines:
+
+```python
+import cobra
+import time
+from tqdm import tqdm
+
+model = cobra.io.read_sbml_model(model_fname)
+model.objective = 'Biomass_Chlamy_mixo'
+avg_val = model.optimize().objective_value
+
+for gene in tqdm(model.genes):
+    with model:
+        gene.knock_out()
+        obj_val = model.optimize().objective_value # get obj value out of Solution object
+        print(gene, obj_val, avg_val, obj_val - avg_val) # fourth value - difference in growth
+        time.sleep(0.25) 
+        # probably also return model.optimize().status
+```
+
+that said cobrapy seems REALLY susceptible to memory issues - there's a function
+that's supposed to do this for all genes (`single_gene_deletion`) but it consistently
+hangs when I use it - which is why I'm going to encode this as written above
+
+but back to this in a bit - need to go back to and complete that replacement thing first! 
+
+earlier I ran this -
+
+```bash
+time python analysis/network/shortest_path.py \
+data/network/chlamyNET.gml data/network/gene_lists/adaptation_gene_list.txt 1 \
+--distances -o data/network/matrices/adaptation_replacement.tsv
+```
+
+which returned a shortest path all x all 'matrix' allowing for 'self paths' set to 1,
+so that there are still 127 mutations even if there are 84 genes
+
+next up - need to redo the sampling to allow for replacement when pulling from MA
+nodes, and setting paths to 1 when that happens
+
+I do worry that if a node is drawn twice, its min path will always be selected as
+itself by default - but let's see how often that happens
+
+
+```bash
+# list(set()) on gene lists (treatment/MA) but resampled with replacement
+# if same node is picked twice, its path with itself is 1
+
+time python analysis/network/shortest_path_resamples.py \
+--treatment data/network/gene_lists/adaptation_gene_list.txt \
+--gml data/network/chlamyNET.gml \
+--replicates 100 \
+--out data/network/resamples/chlamynet_full_resample_100_replacement.tsv
+```
+
+## 20/11/2021
+
+wait - there was a bug that meant the same node was always picked as a node's
+min path, even if it was only in there once
+
+going again:
+
+```bash
+time python analysis/network/shortest_path_resamples.py \
+--treatment data/network/gene_lists/adaptation_gene_list.txt \
+--gml data/network/chlamyNET.gml \
+--replicates 100 \
+--out data/network/resamples/chlamynet_full_resample_100_replacement.tsv
+```
