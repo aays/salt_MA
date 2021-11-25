@@ -696,13 +696,13 @@ from tqdm import tqdm
 
 model = cobra.io.read_sbml_model(model_fname)
 model.objective = 'Biomass_Chlamy_mixo'
-avg_val = model.optimize().objective_value
+wt_growth = model.optimize().objective_value
 
 for gene in tqdm(model.genes):
     with model:
         gene.knock_out()
         obj_val = model.optimize().objective_value # get obj value out of Solution object
-        print(gene, obj_val, avg_val, obj_val - avg_val) # fourth value - difference in growth
+        print(gene, obj_val, wt_growth, obj_val - wt_growth) # fourth value - difference in growth
         time.sleep(0.25) 
         # probably also return model.optimize().status
 ```
@@ -756,3 +756,65 @@ time python analysis/network/shortest_path_resamples.py \
 --replicates 100 \
 --out data/network/resamples/chlamynet_full_resample_100_replacement.tsv
 ```
+
+## 23/11/2021
+
+alright - back to making flux balance analysis happen
+
+I think the easiest (though prob not the most efficient) way to do this would
+be to create a giant lookup of genes in the network along the lines of
+
+```
+gene biomass_knockout biomass_original biomass_difference biomass_ratio
+```
+
+and then use this lookup to pick out which genes were mutated and get their
+respective biomass differences
+
+there might be an issue where isoforms are listed on a single row
+(e.g. `Cre01.123098 OR Cre01.498900`) and I might leave these
+as is - or is it worth splitting them into separate rows? don't
+think it makes a huge difference in terms of interpretation, but split
+rows might be easier to iterate through 
+
+## 24/11/2021
+
+script's ready - giving this a go - need to be in
+the 'metabolic' conda environment though
+
+
+```bash
+mkdir -p data/network/knockouts/
+
+time python analysis/network/metabolic_knockouts.py \
+--model_fname data/network/metabolic/iCre1355_mixo.xml \
+--objective mixo --out data/network/knockouts/mixo_all.tsv
+```
+
+looks good (though I could afford to hide stderr from the network loading code...) - 
+repeating this for auto and hetero
+
+```bash
+time python analysis/network/metabolic_knockouts.py \
+--model_fname data/network/metabolic/iCre1355_hetero.xml \
+--objective hetero --out data/network/knockouts/hetero_all.tsv
+
+time python analysis/network/metabolic_knockouts.py \
+--model_fname data/network/metabolic/iCre1355_auto.xml \
+--objective auto --out data/network/knockouts/auto_all.tsv
+```
+
+## 25/11/2021
+
+for some reason the auto run keeps freezing 95 genes in - having it skip over
+that gene doesn't change anything either
+
+given I was doing earlier testing with auto and it kept freezing then too, I think
+there might be a bug in the _network_ instead of a memory issue in cobrapy like I
+was assuming earlier - but in either case, it makes sense to me to stick to the
+mixotrophic network anyways, so let's just work with that for now
+
+going to download the hetero and mixo lookups and look at the growth ratios of
+mutated salt genes in R
+
+
