@@ -258,7 +258,6 @@ obs_exp_salt = salt_group_table %>%
   mutate(anc_mut = substr(type, 1, 1))
 
 obs_exp_salt
-  
 ```
 
 ## Calculate mutation spectrum relative to callables
@@ -440,15 +439,16 @@ obs_exp %>%
   mutate(
     xcol = str_replace(type, '>', ' \u2192 '),
     name = case_when(
-      name == 'adaptation_nonsilent' ~ 'HS lines (non-silent sites)',
-      name == 'adaptation_silent' ~ 'HS lines (silent sites)',
+      # name == 'adaptation_nonsilent' ~ 'HS lines (non-silent sites)',
+      # name == 'adaptation_silent' ~ 'HS lines (silent sites)',
+      name == 'adaptation' ~ 'HS lines',
       name == 'ma' ~ 'MA',
       name == 'salt_0' ~ 'Salt MA (control)',
       name == 'salt_5' ~ 'Salt MA (salt)'
     )) %>% 
   mutate(
     name = fct_relevel(name, 
-      c('MA', 'HS lines (non-silent sites)', 'HS lines (silent sites)', 
+      c('MA', 'HS lines', 
         'Salt MA (control)', 'Salt MA (salt)'))
   ) %>% 
 ggplot(
@@ -478,7 +478,7 @@ ggplot(
   guides(
     fill = guide_legend(ncol = 2, nrow = 3)
   ) +
-  scale_fill_manual(values = wes_palette(7, name = 'Darjeeling1', type = 'continuous')[3:7])
+  scale_fill_manual(values = wes_palette(7, name = 'Darjeeling1', type = 'continuous')[c(3,5,6,7)])
 
 
 ```
@@ -655,7 +655,7 @@ rate_summarised_cis = bind_rows(
 Plot with CIs:
 
 ```{r}
-rate_summarised_combined %>% 
+spectrum_rate_plot_abs = rate_summarised_combined %>% 
   filter(sample_factor != 'salt_0') %>% 
   mutate(
     sample_factor = case_when(
@@ -668,7 +668,9 @@ rate_summarised_combined %>%
       c('MA', 'HS lines', 'MA in salt'))
   ) %>% 
   mutate(
-    type = str_replace(type, '>', ' \u2192 ')) %>% 
+    # note - eps/pdf can't handle the arrow character, even if it's written directly
+    # will need to export svg
+    type = str_replace(type, '>', ' → ')) %>% 
   
 ggplot(aes(fill = sample_factor)) +
   geom_bar(
@@ -710,7 +712,93 @@ ggplot(aes(fill = sample_factor)) +
       expression(10^-9), expression(10^-8))
   )
 
+spectrum_rate_plot_abs
+
+# ggsave(here('plots/spectrum_rate_plot_abs.svg'), plot = spectrum_rate_plot_abs, width = 8, height = 4)
+
 ```
+
+Create normalized plot (each bar divided by the average rate in that group)
+
+```{r}
+# need to transform both the data *and* the CIs
+# it'll be easiest to combine the CI data frame with the original data for this
+
+rate_summarised_combined_clean = rate_summarised_combined %>% 
+  filter(sample_factor != 'salt_0') %>% 
+  mutate(
+    sample_factor = case_when(
+      sample_factor == 'adaptation' ~ 'HS lines',
+      sample_factor == 'ma' ~ 'MA',
+      sample_factor == 'salt_5' ~ 'MA in salt'
+    )) %>% 
+  mutate(
+    sample_factor = fct_relevel(sample_factor, 
+      c('MA', 'HS lines', 'MA in salt'))
+  ) %>% 
+  mutate(
+    type = str_replace(type, '>', ' \u2192 ')) %>% 
+  
+  # add CIs
+  left_join(
+    rate_summarised_cis,
+    by = c('sample_factor', 'type')
+  ) %>% 
+  
+  # select necessary columns and do transformation
+  select(
+    sample_factor, type, base, rate, conf.low, conf.high
+  ) %>% 
+  group_by(sample_factor, base) %>% 
+  mutate(
+    across(
+      where(is.numeric), .fns = ~ . / mean(.),
+      .names = '{.col}_relative'
+    )
+  )
+  
+spectrum_rate_plot_relative = ggplot(rate_summarised_combined_clean, aes(fill = sample_factor)) +
+  geom_bar(
+    mapping = aes(x = type, y = rate_relative, fill = sample_factor),
+    stat = 'identity', 
+    position = position_dodge(),
+    color = 'black') +
+  geom_errorbar(
+    mapping = aes(
+      x = type,
+      ymin = conf.low_relative,
+      ymax = conf.high_relative),
+    position = position_dodge(width = 0.9),
+    width = 0.5
+  ) +
+  theme_classic() +
+  labs(
+    x = 'Base change type',
+    y = 'Observed over expected'
+  ) +
+  theme(
+    axis.text = element_text(size = 12, color = 'black'),
+    axis.title = element_text(size = 12, color = 'black'),
+    legend.title = element_blank(),
+    # legend.position = c(0.2, 0.88),
+    legend.position = 'top',
+    legend.background = element_blank(),
+    legend.text = element_text(size = 10, color = 'black')
+  ) +
+  guides(
+    fill = guide_legend(ncol = 3, nrow = 2)
+  ) +
+  scale_fill_manual(values = wes_palette(4, name = 'Darjeeling1', type = 'continuous')[2:4]) +
+  coord_cartesian(
+    y = c(0, 2)
+  ) +
+  geom_hline(yintercept = 1, linetype = 'dashed')
+
+spectrum_rate_plot_relative
+
+# ggsave(here('plots/spectrum_rate_plot_rel.svg'), plot = spectrum_rate_plot_relative, width = 8, height = 4)
+```
+
 
 
 ```{r}

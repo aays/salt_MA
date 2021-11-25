@@ -1396,8 +1396,19 @@ fig_2_all = ma_orig_final %>%
 
 ```{r}
 fig_2_all = read_tsv(here('data/plots/fig_2_all.tsv'))
+palette = wes_palette(7, name = 'Darjeeling1', type = 'continuous')
 
-fig_2_all %>% 
+annotation_plot_all = fig_2_all %>% 
+  mutate(
+    sample_factor = fct_relevel(sample_factor, 
+      c('MA', 'HS', 'Salt MA (control)', 'Salt MA (salt)')),
+    gene_set = fct_relevel(
+      gene_set, c('genome wide', 'expressed genes', 'salt genes')),
+    annotation = fct_relevel(
+      annotation, c('intergenic', 'utr5', 'CDS', 'intronic', 'utr3')
+    )
+  ) %>% 
+
  ggplot(
     aes(x = annotation, y = prop, fill = sample_factor)) +
   geom_bar(
@@ -1421,8 +1432,10 @@ fig_2_all %>%
   ) +
   scale_fill_manual(
     values = c(
-      'MA' = '#87C5FC', 'HS' = '#FF5B5F', 
-      'Salt MA (control)' = palette[6], 'Salt MA (salt)' = palette[7])
+      'MA' = palette[3], # '#87C5FC', orig color
+      'HS' = palette[5], # '#FF5B5F', orig color
+      'Salt MA (control)' = palette[6], 
+      'Salt MA (salt)' = palette[7])
   ) +
   # macro elements
   guides(fill = guide_legend(
@@ -1444,6 +1457,11 @@ fig_2_all %>%
     axis.text = element_text(family = 'Helvetica', colour = 'black', size = 10),
     axis.text.x = element_text(angle = 45, hjust = 1)
   )
+
+annotation_plot_all
+
+# ggsave(here('plots/annotation.eps'), plot = annotation_plot_all, width = 8, height = 4)
 ```
+
 
 
