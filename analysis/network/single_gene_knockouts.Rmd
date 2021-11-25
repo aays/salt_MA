@@ -1,0 +1,122 @@
+---
+title: "Single gene knockouts"
+author: Ahmed Hasan
+output: pdf_document
+---
+
+# Package import
+
+```{r}
+library(tidyverse)
+library(here)
+library(fs)
+```
+
+# Data import
+
+```{r}
+mixo = read_tsv(
+  here('data/network/knockouts/mixo_all.tsv'),
+  col_types = cols()
+)
+
+hetero = read_tsv(
+  here('data/network/knockouts/hetero_all.tsv'),
+  col_types = cols()
+)
+
+d = list()
+d$adaptation = read_tsv(
+  here('data/rate/mut_describer/adaptation.gene_sets.tsv'),
+  col_types = cols()
+) %>% 
+  rename(gene = Gene.primaryIdentifier)
+
+d$ma = read_tsv(
+  here('data/spectrum_context/MA/final.curated_muts.coord_sorted.txt'),
+  col_types = cols(), na = c('.')) %>% 
+  select(-chromosome_1, -position_1) %>% 
+  mutate(
+    gene = str_extract(feature_names, 'Cre[0-9]{1,2}\\.g[0-9]+')
+  )
+
+```
+
+# Joins
+
+## Preprocessing
+
+Need to preprocess the metabolic dataset a bit - there are cases where a gene is present twice, once
+as an isoform and once just on its own. If the values differ I'm going to defer to the row where
+the gene is on its own
+
+also some instances where different transcripts of the same gene are represented separately -
+but based off this gnarly pipe chain it looks like the knockout values are always consistent
+between them
+
+```
+hetero %>% mutate(gene_name = str_extract(gene, 'Cre[0-9]{1,2}.g[0-9]+')) %>% select(objective, gene, gene_name, everything()) %>% filter(!str_detect(gene, 'OR'), !str_detect(gene, 'AND')) %>% arrange(gene_name) %>% group_by(gene_name) %>% mutate(n = n()) %>% filter(n > 1) %>% View()
+```
+
+which means I can just grab the first if there are two transcripts and work with that -
+
+
+```{r}
+get_metabolic_genes = function(d, metabolic) {
+  genes_found_indices = sapply(
+    seq_along(d$gene),
+    function(i) {
+      current_gene = d$gene[i]
+      match_indices = str_detect(metabolic$gene, paste0('^', current_gene))
+      
+      match_bool = any(match_indices)
+      
+      if (is.na(match_bool)) {
+        return(NA)
+      }
+      
+      if (sum(match_indices) > 1) {
+        # multiple matches
+        matches = metabolic$gene[match_indices]
+        # get shortest match - single gene
+        match_out = matches[str_length(matches) == min(str_length(matches))]
+        if (length(match_out > 1)) {
+          match_out = match_out[1] # see note above
+        }
+      } else if (sum(match_indices == 1)) {
+        matches = metabolic$gene[match_indices]
+        match_out = matches
+      } else {
+        match_out = NA
+      }
+      return(match_out)
+    }
+  )
+  d$metabolic_gene = genes_found_indices
+  return(d)
+}
+```
+
+## Actual joins
+
+```{r}
+salt_hetero = d$salt %>% 
+  get_metabolic_genes(., hetero) %>% 
+  select(
+    gene, chromosome, position, 
+    mutation, type, metabolic_gene) %>% 
+  inner_join(
+    rename(hetero, metabolic_gene = gene),
+    by = 'metabolic_gene')
+
+salt_mixo = d$salt %>% 
+  get_metabolic_genes(., mixo) %>% 
+  select(
+    gene, chromosome, position, 
+    mutation, type, metabolic_gene) %>% 
+  inner_join(
+    rename(hetero, metabolic_gene = gene),
+    by = 'metabolic_gene')
+
+```
+
