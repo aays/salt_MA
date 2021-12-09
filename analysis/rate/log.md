@@ -1263,3 +1263,119 @@ time python analysis/rate/calculate_rate.py \
 --out data/rate/saltMA_SNM_rate_final.tsv
 ```
 
+## 9/12/2021
+
+minor update - filtering out outliers - basically any reading that's <= 4 cells
+should just be excluded from the data 
+
+same code as above, but now with filters applied
+
+the P2 columns represent reinhardtii counts so that's what we'll be working with
+
+```R
+# in data/rate
+library(tidyverse)
+
+d = read_tsv('generation_time_data.txt')
+d %>%
+    filter(P2_Events < 5) # 15 rows
+
+# going to set these to NA - that way the mean can be calculated without them
+d_div = d %>%
+    mutate(P2_Events = ifelse(P2_Events < 5, NA, P2_Events)) %>%
+    mutate(colony_count = P2_Events * (100 / Volume_uL)) %>%
+    mutate(N_divisions = log(colony_count) / log(2))
+
+d_summarised = d_div %>%
+    group_by(Strain, Group, Condition, Day) %>%
+    summarise(summed_divisions = sum(N_divisions, na.rm = TRUE), 
+              row_count = n(),
+              na_count = sum(is.na(N_divisions))) %>% # get mean while being mindful of NA count
+    mutate(N_divisions = summed_divisions / (row_count - na_count)) %>%
+    mutate(N_divisions = ifelse(is.nan(N_divisions), 0, N_divisions)) %>% # for the lone DL41_5 D5 zerodiv error
+    select(Strain, Group, Condition, Day, N_divisions)
+
+# get weighted mean of 4/5 day cycle
+d_wide = d_summarised %>%
+    pivot_wider(
+        names_from = c(Group, Condition, Day),
+        values_from = N_divisions)
+
+d_final = d_wide %>%
+    mutate(weighted_mean_0 = (2*ANC_0_DAY5) + ANC_0_DAY4 + (2*T25_0_DAY5) + T25_0_DAY4) %>%
+    mutate(weighted_mean_5 = (2*ANC_5_DAY5) + ANC_5_DAY4 + (2*T25_5_DAY5) + T25_5_DAY4) %>%
+    mutate(weighted_mean_0 = weighted_mean_0 / 6, weighted_mean_5 = weighted_mean_5 / 6)
+
+write_tsv(d_final, 'generation_time_summarised_all.tsv')
+
+# creating a version that's compatible with the rate script - so just 0 and 5 and means
+d_final_summarised = d_final %>% # lol these object names
+    select(Strain, weighted_mean_0, weighted_mean_5) %>%
+    pivot_longer(
+        cols = contains('weighted_mean'), 
+        names_to = 'measure', values_to = 'value') %>%
+    mutate(measure = str_extract(measure, '[05]$')) %>%
+    mutate(Strain = paste(Strain, measure, sep = '_')) %>%
+    select(strain = Strain, value) %>%
+    mutate(generations = round(value * 25, 2)) %>% # 25 transfers
+    select(-value)
+
+write_tsv(d_final_summarised, 'generation_time_final.tsv', col_names = FALSE)
+```
+
+rerunning the rate script - again
+
+```bash
+time python analysis/rate/calculate_rate.py \
+--mut_table data/rate/mut_describer/muts_described.final.tsv \
+--callables_table data/rate/all_callable.tsv.gz \
+--vcf data/alignments/genotyping/UG/pairs/CC1373_samples.vcf.gz \
+--generation_file data/rate/generation_time_final.tsv \
+--out data/rate/saltMA_SNM_rate_final.tsv
+```
+
+and repeating for indels:
+
+
+```bash
+time python analysis/rate/calculate_rate.py \
+--mut_table data/rate/mut_describer/indels_described.gene_sets.tsv \
+--callables_table data/rate/all_callable.tsv.gz \
+--vcf data/alignments/genotyping/UG/pairs/CC1373_samples.vcf.gz \
+--generation_file data/rate/generation_time_final.tsv \
+--out data/rate/saltMA_indel_rate_final.tsv
+```
+
+I... forgot to include mtMinus in the callables file. unbelievable
+
+going to temporarily modify the regions line in `callable_sites.py` (line 45)
+to just `mtMinus` and generate an mtMinus-only callables file - can combine
+with the all callable file after
+
+```bash
+time python analysis/rate/callable_sites.py \
+--gvcf_dir data/alignments/genotyping/filtered_gvcfs/ \
+--out data/rate/mtMinus_callables.tsv
+```
+
+wait - going through my notes I think I may not have made the callables file
+using the filtered gvcfs... not going to take any chances - now reinstating the
+full regions list and including mtMinus before we get this going again (fourth
+time's the charm baby!) 
+
+```bash
+time python analysis/rate/callable_sites.py \
+--gvcf_dir data/alignments/genotyping/filtered_gvcfs/ \
+--out data/rate/all_callable_v4.tsv
+```
+
+and once this is done
+
+```bash
+# in data/rate
+bgzip all_callable.tsv
+tabix -p vcf all_callable.tsv.gz
+```
+
+
+

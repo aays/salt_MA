@@ -61,7 +61,7 @@ def get_chr_lengths(vcf_reader) -> dict:
         dict with contig names as keys and lengths as values
     """
     raw_header = vcf_reader.raw_header
-    regions = ['chromosome_[0-9]+', 'scaffold_[0-9]+', 'cpDNA', 'mtDNA']
+    regions = ['chromosome_[0-9]+', 'scaffold_[0-9]+', 'cpDNA', 'mtDNA', 'mtMinus']
     keyvals = []
     for region in regions:
         pattern = f'({region},length=[0-9]+)'
@@ -189,10 +189,10 @@ def parse_gen_file(generation_file):
     """
     generations = {}
     with open(generation_file, 'r') as f:
-        reader = csv.reader(f, delimiter=' ')
+        reader = csv.reader(f, delimiter='\t')
         for line in reader:
             sample, gens = line
-            gens = int(gens.rstrip())
+            gens = int(round(float(gens.rstrip())))
             generations[sample] = gens
     return generations
 
@@ -237,7 +237,7 @@ def get_rates(mut_table, callables_table, vcf, generation_count, generation_file
         raise InputError('both gen count and file provided - pick one!')
     elif generation_file and not generation_count:
         print('[saltMA] obtaining generation times')
-        generations = parse_gen_file
+        generations = parse_gen_file(generation_file)
     elif generation_count and not generation_file:
         generations = generation_count
     else:
