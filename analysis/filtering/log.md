@@ -3086,8 +3086,8 @@ just scan the S33 mutations generally
 from cyvcf2 import VCF
 import csv
 
-with open('data/rate/mut_describer/adaptation.gene_sets.tsv') as f:
-    muts = [line for line in csv.DictReader(f, delimiter='\t')
+with open('data/rate/mut_describer/adaptation.gene_sets.tsv', 'r') as f:
+    muts = [line for line in csv.DictReader(f, delimiter='\t')]
 s33 = [mut for mut in muts if mut['mutant_sample'] == './S33/'] # 58 muts
 
 reader = VCF('/research/data/chlamydomonas/All_samples_vcf/all_samples.v2.vcf.gz')
@@ -3157,7 +3157,59 @@ chromosome_6 2151220 ['CC2931', 'CC3268'] # looks like a microsat - C/CA/A muts 
 
 tomorrow - need to update the mut describer file and redo... well, everything
 
+## 9/12/2021
 
+today - let's get these mutations removed from the adaptation mut describer file
+
+will just get the chroms/positions out and remove them manually from the mut describer
+files in `data/rate/` (the ones ending in `gene_sets` since those have slightly more info)
+
+```python
+# mostly code from the other day
+from cyvcf2 import VCF
+import csv
+
+with open('data/rate/mut_describer/adaptation.gene_sets.tsv', 'r') as f:
+    muts = [line for line in csv.DictReader(f, delimiter='\t')]
+s33 = [mut for mut in muts if mut['mutant_sample'] == './S33/'] # 58 muts
+
+reader = VCF('/research/data/chlamydomonas/All_samples_vcf/all_samples.v2.vcf.gz')
+
+def get(mut):
+    chrom = mut['chromosome']
+    pos = mut['position']
+    record = [r for r in reader(f'{chrom}:{pos}-{pos}')][0]
+    return record
+
+def sample_check(mut, record):
+    derived = mut['mutation'][-1]
+    samples = [reader.samples[i] for i, base in enumerate(record.gt_bases) if base == derived]
+    return samples
+
+suspect = []
+for i, mut in enumerate(s33):
+    samples = sample_check(mut, get(mut))
+    if samples and any([s in samples for s in ['CC3059', 'C3060', 'CC3063', 'CC3064']]):
+        suspect.append(mut)
+
+with open('data/rate/mut_describer/adaptation.gene_sets.tsv', 'r') as f_in:
+    reader = csv.DictReader(f_in, delimiter='\t')
+    with open('data/rate/mut_describer/adaptation.gene_sets.filtered.tsv', 'w') as f_out:
+        writer = csv.DictWriter(f_out, delimiter='\t', fieldnames=reader.fieldnames)
+        writer.writeheader()
+        kept, removed = 0, 0
+
+        for record in reader:
+            if record['mutant_sample'] == './S33/':
+                if record in suspect:
+                    removed += 1 # should be 24 removed total
+                    continue
+            else:
+                writer.writerow(record)
+                kept += 1
+```
+
+all done - now to export this offline and get the other analyses going
 
 
 
