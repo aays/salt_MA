@@ -2991,3 +2991,175 @@ with open('data/mutations/mut_describer/indels_described.tsv', 'r') as f:
 ```
 
 looks good - redoing for the gene sets version in `data/rate/` and then renaming files
+
+## 5/12/2021
+
+and we're back - need to make sense of this one suspect gene with 20+ mutations
+
+looks like it's `Cre06.g265700` in S33 - in the GFF:
+
+```
+chromosome_6    phytozome8_0    gene    2127920 2145665 .       -       .       ID=Cre06.g265700;Name=Cre06.g265700
+```
+
+going to get a few bam snippets here to then look at offline, following what I did on 20/8
+
+```bash
+mkdir -p data/mutations/HS_tests
+mkdir -p data/mutations/HS_tests/Cre06.g265700
+```
+
+and then
+
+```python
+import os
+import re
+import subprocess
+from glob import glob
+from tqdm import tqdm
+
+orig_ma = glob('data/alignments/orig_MA_bams/*bam')
+orig_salt = glob('../alignments/BAM_files/*bam')
+
+gene = 'Cre06.g265700'
+region = 'chromosome_6:2127000-2146500'
+
+for bam in orig_ma:
+    bam_basename = os.path.basename(bam)
+    cmd = f'samtools view {bam} {region} -b -o data/mutations/HS_tests/{gene}/{bam_basename}'
+    subprocess.run(cmd.split(' '))
+
+    index_cmd = f'samtools index data/mutations/HS_tests/{gene}/{bam_basename}'
+    subprocess.run(index_cmd.split(' '))
+    with open(f'data/mutations/HS_tests/{gene}/MA.bam.list', 'a') as f:
+        f.write(bam_basename + '\n')
+
+for bam in orig_salt:
+    bam_basename = os.path.basename(bam)
+    cmd = f'samtools view {bam} {region} -b -o data/mutations/HS_tests/{gene}/{bam_basename}'
+    subprocess.run(cmd.split(' '))
+
+    index_cmd = f'samtools index data/mutations/HS_tests/{gene}/{bam_basename}'
+    subprocess.run(index_cmd.split(' '))
+
+    if bam_basename.startswith('D'):
+        with open(f'data/mutations/HS_tests/{gene}/DL.bam.list', 'a') as f:
+            f.write(bam_basename + '\n')
+    if bam_basename.startswith('S'):
+        with open(f'data/mutations/HS_tests/{gene}/SL.bam.list', 'a') as f:
+            f.write(bam_basename + '\n')
+```
+
+next time - download for offline use and open in IGV - squint at S33 mutations
+
+## 8/12/2021
+
+making a filtered all samples VCF to compare haplotypes against:
+
+```bash
+# in /research/data/chlamydomonas/All_samples_vcf/
+tabix all_samples.v2.vcf.gz chromosome_6:2127000-2153621 -h > \
+/research/projects/chlamydomonas/salt_lines/salt_MA/weird_region.vcf
+
+# back in salt project
+bgzip weird_region.vcf
+tabix -p vcf weird_region.vcf.gz
+```
+
+looking at the variants:
+
+```python
+from cyvcf2 import VCF
+reader = VCF('weird_region.vcf.gz')
+records = [record for record in reader]
+
+def get_record(pos):
+    return [record for record in records if record.POS == pos][0]
+
+# manual checks against spreadsheet
+```
+
+actually screw this - let's work with the actual VCF directly and
+just scan the S33 mutations generally
+
+```python
+from cyvcf2 import VCF
+import csv
+
+with open('data/rate/mut_describer/adaptation.gene_sets.tsv') as f:
+    muts = [line for line in csv.DictReader(f, delimiter='\t')
+s33 = [mut for mut in muts if mut['mutant_sample'] == './S33/'] # 58 muts
+
+reader = VCF('/research/data/chlamydomonas/All_samples_vcf/all_samples.v2.vcf.gz')
+
+def get(mut):
+    chrom = mut['chromosome']
+    pos = mut['position']
+    record = [r for r in reader(f'{chrom}:{pos}-{pos}')][0]
+    return record
+
+def sample_check(mut, record):
+    derived = mut['mutation'][-1]
+    samples = [reader.samples[i] for i, base in enumerate(record.gt_bases) if base == derived]
+    return samples
+
+suspect = []
+for i, mut in enumerate(s33):
+    samples = sample_check(mut, get(mut))
+    if samples:
+        suspect.append(mut)
+        print(mut['chromosome'], mut['position'], samples)
+
+# looks like a TON of chromosome 6 calls fall under this
+# where they share a haplotype with previous samples...
+
+# looking at the most common sample appearances -
+d = {}
+for mut in suspect:
+    samples = sample_check(mut, get(mut))
+    for sample in samples:
+        if sample in d:
+            d[sample] += 1
+        else:
+            d[sample] = 1
+    
+sorted(d.items(), key=lambda pair: pair[1], reverse=True)
+
+# output, pasted
+[('CC3059', 24), ('CC3060', 24), ('CC3063', 24), ('CC3064', 24), 
+('CC3069', 24), ('CC3071', 24), ('CC2936', 23), ('GB138', 21), 
+('CC3075', 17), ('CC3079', 17), ('CC2931', 8), ('GB117', 6), ('CC3268', 6), 
+('GB119', 5), ('GB141', 5), ('GB57', 5), ('GB66', 3), ('CC3072', 3), 
+('CC3062', 3), ('CC3065', 3), ('CC3073', 3), ('CC2938', 3), ('CC3076', 3), 
+('CC3082', 3), ('CC3083', 3), ('CC3084', 3), ('CC3086', 3), ('GB13', 3), 
+('CC3061', 3), ('CC2344', 2), ('CC2932', 2), ('CC2343', 1), 
+('NIES2463', 1), ('NIES2464', 1)]
+```
+
+there are 28 'suspect' mutations, and 24 of them seem to share an allele
+with the first five samples in the list above
+
+which ones don't?
+
+```python
+for mut in suspect:
+    samples = sample_check(mut, get(mut))
+    if not any([s in samples for s in ['CC3059', 'CC3060', 'CC3063', 'CC3064']):
+        print(mut)
+
+# output 
+# manually pulled up equivalent records and looked at .gt_bases
+chromosome_6 2104320 ['GB66'] # indel - looks legit
+chromosome_6 2108941 ['CC2343'] # another indel in all samples but SNP here - should be good
+chromosome_6 2151219 ['CC2931', 'CC3268'] # A/C/G all present, C derived allele, looks good
+chromosome_6 2151220 ['CC2931', 'CC3268'] # looks like a microsat - C/CA/A muts - honestly fine
+```
+
+tomorrow - need to update the mut describer file and redo... well, everything
+
+
+
+
+
+
+
