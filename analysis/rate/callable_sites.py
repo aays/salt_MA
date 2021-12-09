@@ -42,7 +42,7 @@ def get_chr_lengths(vcf_reader) -> dict:
         dict with contig names as keys and lengths as values
     """
     raw_header = vcf_reader.raw_header
-    regions = ['chromosome_[0-9]+', 'scaffold_[0-9]+', 'cpDNA', 'mtDNA']
+    regions = ['chromosome_[0-9]+', 'scaffold_[0-9]+', 'cpDNA', 'mtDNA', 'mtMinus']
     keyvals = []
     for region in regions:
         pattern = f'({region},length=[0-9]+)'
