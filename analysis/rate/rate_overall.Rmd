@@ -1,0 +1,197 @@
+---
+title: "Overall rate calculations"
+author: Ahmed Hasan
+output: pdf_document
+---
+
+# Package import
+
+```{r}
+library(tidyverse)
+library(fs)
+library(here)
+library(wesanderson)
+```
+
+# Data import
+
+```{r}
+snp_rate = read_tsv(
+  here('data/rate/saltMA_SNM_rate_final.tsv'), 
+  col_types = cols()
+  ) %>% 
+  mutate(
+    sample_group = str_extract(sample, '^[A-Z]{2}'),
+    sample_type = str_extract(sample, '[05]$'),
+    sample_factor = paste(sample_group, sample_type, sep = '_')
+  ) %>% 
+  mutate(
+    type = 'SNM'
+  ) %>% 
+  filter(sample_type == '5') # only keep salt 5
+
+indel_rate = read_tsv(
+  here('data/rate/saltMA_indel_rate_final.tsv'),
+  col_types = cols()
+) %>% 
+  mutate(
+    sample_group = str_extract(sample, '^[A-Z]{2}'),
+    sample_type = str_extract(sample, '[05]$'),
+    sample_factor = paste(sample_group, sample_type, sep = '_')
+  ) %>% 
+  mutate(
+    type = 'indel'
+  ) %>% 
+  filter(sample_type == '5')
+
+salt_all = bind_rows( # combined mutations, SNM + indel
+  snp_rate, indel_rate
+) %>% 
+  select(-type, -mut_rate) %>% 
+  group_by(sample, chrom) %>% 
+  mutate(
+    mutations = sum(mutations)) %>% 
+  distinct()
+
+salt_rate_lookup = snp_rate %>% 
+  select(sample, chrom)
+
+generation_lookup = snp_rate %>% 
+  select(sample, generations) %>% 
+  distinct()
+
+all_callables = read_tsv(
+  here('data/rate/total_callables_samples.tsv'),
+  col_types = cols()
+) %>% 
+  select(
+    sample, chrom = scaffold, 
+    callable_sites = callable_total) %>% 
+  mutate(
+    mutations = 0,
+    mut_rate = 0,
+    sample_group = str_extract(sample, '^[A-Z]{2}'),
+    sample_type = str_extract(sample, '[05]$'),
+    sample_factor = paste(sample_group, sample_type, sep = '_')
+  ) %>% 
+  filter(sample_type == '5') %>% 
+  anti_join(salt_rate_lookup, by = c('sample', 'chrom')) %>% 
+  left_join(generation_lookup, by = c('sample')) %>% 
+  # reorder
+  select(sample, chrom, mutations, callable_sites, generations, everything())
+
+# remake salt rate dataset by adding 0s
+salt_rate = bind_rows(
+  salt_all, all_callables
+) %>% 
+  arrange(sample, chrom) %>% 
+  ungroup()
+```
+
+# Rate values
+
+Overall rate:
+
+```{r}
+salt_rate %>% 
+  select(mutations, callable_sites, generations) %>% 
+  mutate(sitegens = callable_sites * generations) %>% 
+  summarise(
+    mutations = sum(mutations),
+    sitegens = sum(sitegens)
+  ) %>% 
+  mutate(
+    mut_rate_overall = mutations / sitegens
+  )
+```
+
+Between 0 and 5:
+
+```{r}
+# outdated - won't run - need to use original snp/indel dfs
+salt_rate %>% 
+  select(sample_type, mutations, callable_sites, generations) %>% 
+  group_by(sample_type) %>% 
+  summarise(
+    mutations = sum(mutations),
+    callable_sites = sum(callable_sites),
+    generations = 250
+  ) %>% 
+  mutate(
+    mut_rate_overall = mutations / (callable_sites * generations)
+  )
+```
+
+Between 0 and 5 across different sample groups:
+
+```{r}
+salt_rate %>% 
+  select(sample, mutations, callable_sites, generations) %>% 
+  group_by(sample) %>% 
+  summarise(
+    mutations = sum(mutations),
+    callable_sites = sum(callable_sites),
+    generations = 250
+  ) %>% 
+  mutate(
+    mut_rate_overall = mutations / (callable_sites * generations),
+    sample_type = str_extract(sample, '[05]$'),
+    sample = str_replace(sample, '_[05]$', '')
+  ) %>% 
+
+
+  ggplot(
+    aes(x = sample, y = mut_rate_overall, fill = sample_type)
+  ) +
+  geom_bar(
+    stat = 'identity', position = 'dodge', color = 'black') +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 12, color = 'black'),
+    axis.text.y = element_text(color = 'black', size = 12)
+  ) +
+  scale_fill_manual(
+    values = wesanderson::wes_palette(7, name = 'Darjeeling1', type = 'continuous')[6:7]) +
+  labs(x = '', y = 'Mutation rate (/bp)') +
+  scale_y_continuous(
+    breaks = c(0, 1e-09, 2e-09, 3e-09), 
+    labels = c(
+      0, expression(1 %*% 10^-9), expression(2 %*% 10^-9), 
+      expression(3 %*% 10^-9))
+    ) +
+  guides(
+    fill = guide_legend(title = 'Sample type')
+  )
+
+# TODO: relabel DL41 and DL46
+# TODO: generate poisson CIs
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
