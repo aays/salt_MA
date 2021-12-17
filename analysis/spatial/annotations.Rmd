@@ -28,6 +28,12 @@ library(wesanderson)
 Loading in the 'final' versions with gene set info columns:
 
 ```{r}
+# splice sites for silent/nonsilent classification of HS muts
+splice_sites = data.frame(
+  chromosome = c('chromosome_12', 'chromosome_5', 'chromosome_6', 'chromosome_8'),
+  position = c(8771346, 2315498, 2122297, 1131421)
+)
+
 salt_ma = read_tsv(
   here('data/rate/mut_describer/muts_described.final.gene_sets.tsv'),
   col_types = cols()
@@ -44,22 +50,34 @@ salt_ma = read_tsv(
     sample_group = str_extract(mutant_sample, '^[A-Z]{2}'),
     sample_type = str_extract(mutant_sample, '[05]$'),
     sample_factor = paste(sample_group, sample_type, sep = '_')
-  )
+  ) %>% 
+  mutate(site_type = case_when(
+    nonsyn_v_syn == 'synonymous' | intronic == 1 | intergenic == 1 ~ 'silent',
+    TRUE ~ 'nonsilent'
+  )) %>% 
+  mutate(site_type = ifelse(
+    chromosome %in% splice_sites$chromosome & position %in% splice_sites$position, 'nonsilent', site_type
+  ))
 
-ma_original <- read_tsv(
+salt_5 = salt_ma %>% 
+  filter(sample_type == '5')
+
+ma_original = read_tsv(
   here('data/rate/mut_describer/ma.gene_sets.tsv'), 
   col_types = cols(), na = c('.')
 ) %>% 
-  select(-chromosome_1, -position_1)
+  select(-chromosome_1, -position_1) %>% 
+  mutate(site_type = case_when(
+    Nonsyn_V_Syn == 'synonymous' | intronic == 1 | intergenic == 1 ~ 'silent',
+    TRUE ~ 'nonsilent'
+  )) %>% 
+  mutate(site_type = ifelse(
+    chromosome %in% splice_sites$chromosome & position %in% splice_sites$position, 'nonsilent', site_type
+  ))
 
-# splice sites for silent/nonsilent classification of HS muts
-splice_sites = data.frame(
-  chromosome = c('chromosome_12', 'chromosome_5', 'chromosome_6', 'chromosome_8'),
-  position = c(8771346, 2315498, 2122297, 1131421)
-)
 
 adaptation = read_tsv(
-  here('data/rate/mut_describer/adaptation.gene_sets.tsv'),
+  here('data/rate/mut_describer/adaptation.gene_sets.filtered.tsv'),
   col_types = cols(), na = c('.')
 ) %>% 
   mutate(site_type = case_when(
@@ -177,7 +195,11 @@ props_all$salt_ma = salt_ma %>%
   mutate(
     numerator = (values / callable_total),
     denominator = sum(numerator),
-    prop = numerator / denominator
+    prop = numerator / denominator,
+    stderr = sqrt((numerator * (1 - numerator)) / callable_total)
+  ) %>% 
+  mutate(
+    stderr = stderr / sum(stderr) # normalize standard errors
   )
 
 props_all$salt_ma
@@ -236,7 +258,11 @@ get_props = function(d, d_callables, salt_ma_bool = FALSE) {
     mutate(
       numerator = (values / callable_total),
       denominator = sum(numerator, na.rm = TRUE),
-      prop = numerator / denominator
+      prop = numerator / denominator,
+      stderr = sqrt((numerator * (1 - numerator)) / callable_total)
+    ) %>% 
+    mutate(
+      stderr = stderr / sum(stderr) # need to be multiplied by 2 for 95% stderr based on normal approximation
     )
   return(out)
 }
@@ -984,7 +1010,7 @@ perrineau_final = map(
 #   expressed_final$salt_ma_5
 # ) %>% 
 #   write_tsv(., here('data/spatial/salt_ma_summarised_expressed_cis.tsv'))
-
+# 
 # write_tsv(perrineau_final$salt_ma, here('data/spatial/salt_ma_perrineau_cis.tsv'))
 # write_tsv(perrineau_final$adaptation, here('data/spatial/adaptation_perrineau_cis.tsv'))
 # write_tsv(perrineau_final$ma_orig, here('data/spatial/ma_orig_perrineau_cis.tsv'))
@@ -1106,7 +1132,7 @@ Between 0, 5, and the previous datasets:
 ```{r}
 # expressed genes - 0 vs 5
 names_x = c('salt_0', 'salt_5')
-names_y = c('ma_orig', 'adaptation_silent', 'adaptation_nonsilent')
+names_y = c('ma_orig', 'adaptation', 'adaptation_silent', 'adaptation_nonsilent')
 
 for (name_1 in names_x) {
   d1 = gene_set_counts[[name_1]]
@@ -1191,11 +1217,14 @@ salt_ma_final = load_final('salt_ma') %>%
 Recreating Fig 2:
 
 ```{r}
-ma_orig_final %>% 
+palette = wes_palette(7, name = 'Darjeeling1', type = 'continuous')
+
+annotation_orig_plot = ma_orig_final %>% 
   bind_rows(adaptation_final) %>% 
+  filter(gene_set != 'expressed genes') %>% 
   mutate(
     gene_set = factor(
-      gene_set, levels = c('genome wide', 'expressed genes', 'salt genes')),
+      gene_set, levels = c('genome wide', 'salt genes')),
     sample_factor = factor(
       sample_factor, levels = c('ma_original', 'adaptation')),
     annotation = factor(
@@ -1227,7 +1256,10 @@ ma_orig_final %>%
     y = 'Proportion of all mutations'
   ) +
   scale_fill_manual(
-    values = c('MA' = '#87C5FC', 'salt-selection' = '#FF5B5F')
+    # values = c('MA' = '#87C5FC', 'salt-selection' = '#FF5B5F')
+    values = c(
+      'MA' = palette[3], # '#87C5FC', orig color
+      'salt-selection' = palette[5]) # '#FF5B5F', orig color
   ) +
   # macro elements
   guides(fill = guide_legend(
@@ -1249,6 +1281,10 @@ ma_orig_final %>%
     axis.text = element_text(family = 'Helvetica', colour = 'black', size = 10),
     axis.text.x = element_text(angle = 45, hjust = 1)
   )
+
+annotation_orig_plot
+
+ggsave(here('plots/annotation_ma_hs.eps'), plot = annotation_orig_plot, width = 6, height = 4)
 ```
 
 Salt MA data:
@@ -1310,8 +1346,6 @@ salt_ma_final %>%
 ```
 
 Fig 2 style 0 and 5 only plot:
-
-- need to redo Perrineau/expressed across all 0 and all 5
 
 ```{r}
 palette = wes_palette(7, name = 'Darjeeling1', type = 'continuous')
@@ -1395,21 +1429,31 @@ fig_2_all = ma_orig_final %>%
 ```
 
 ```{r}
-fig_2_all = read_tsv(here('data/plots/fig_2_all.tsv'))
+fig_2_all = read_tsv(here('data/plots/fig_2_all.tsv'), col_types = cols())
 palette = wes_palette(7, name = 'Darjeeling1', type = 'continuous')
 
 annotation_plot_all = fig_2_all %>% 
+  # set up data
+  filter(gene_set != 'expressed genes', sample_factor != 'Salt MA (control)') %>% 
+  mutate(
+    annotation = case_when(
+      annotation == 'utr5' ~ "5' UTR",
+      annotation == 'utr3' ~ "3' UTR",
+      TRUE ~ as.character(annotation)
+    )
+  ) %>% 
   mutate(
     sample_factor = fct_relevel(sample_factor, 
-      c('MA', 'HS', 'Salt MA (control)', 'Salt MA (salt)')),
+      c('MA', 'HS', 'Salt MA (salt)')),
     gene_set = fct_relevel(
-      gene_set, c('genome wide', 'expressed genes', 'salt genes')),
+      gene_set, c('genome wide', 'salt genes')),
     annotation = fct_relevel(
-      annotation, c('intergenic', 'utr5', 'CDS', 'intronic', 'utr3')
+      annotation, c('intergenic', "5' UTR", 'CDS', 'intronic', "3' UTR")
     )
   ) %>% 
 
- ggplot(
+  # plot
+  ggplot(
     aes(x = annotation, y = prop, fill = sample_factor)) +
   geom_bar(
     stat = 'identity', 
@@ -1434,7 +1478,7 @@ annotation_plot_all = fig_2_all %>%
     values = c(
       'MA' = palette[3], # '#87C5FC', orig color
       'HS' = palette[5], # '#FF5B5F', orig color
-      'Salt MA (control)' = palette[6], 
+      # 'Salt MA (control)' = palette[6], 
       'Salt MA (salt)' = palette[7])
   ) +
   # macro elements
@@ -1460,7 +1504,7 @@ annotation_plot_all = fig_2_all %>%
 
 annotation_plot_all
 
-# ggsave(here('plots/annotation.eps'), plot = annotation_plot_all, width = 8, height = 4)
+ggsave(here('plots/annotation.eps'), plot = annotation_plot_all, width = 6, height = 4)
 ```
 
 

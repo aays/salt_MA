@@ -386,3 +386,199 @@ write_tsv(expressed_summarised, 'expressed_ma_callables_summarised.tsv')
 write_tsv(perrineau_summarised, 'perrineau_ma_callables_summarised.tsv')
 
 ```
+
+## 15/12/2021
+
+and of course - I have to remake the annotation callables files since
+`all_callable.tsv.gz` has been remade (see rate log)
+
+code from July 31 (!) - expected to run for 2 hours
+
+```python
+import csv
+from tqdm import tqdm
+import pysam
+from datetime import datetime
+
+annotations = ['genic', 'exonic', 'intronic', 'intergenic', 
+    'utr5', 'utr3', 'fold0', 'fold4', 'fold2', 'fold3', 'CDS', 'mRNA']
+scaffolds = [f'chromosome_{i}' for i in range(1, 18)]
+scaffolds.extend([f'scaffold_{i}' for i in range(18, 55)])
+scaffolds.extend(['mtDNA', 'cpDNA', 'mtMinus']) # added mtMinus
+
+with open('data/rate/annotation_callables.tsv', 'w') as f:
+    fieldnames = ['scaffold', 'annotation', 'genome_count', 'callable_total', 'sample_count']
+    writer = csv.DictWriter(f, delimiter='\t', fieldnames=fieldnames)
+    writer.writeheader()
+    
+
+    for ant in annotations:
+        for scaffold in scaffolds:
+            out_dict = {}
+
+            ant_reader = pysam.TabixFile('data/references/annotation_table.txt.gz')
+            header = ant_reader.header[-1].split('\t')
+            idx = header.index(ant)
+
+            lookup = ''
+            chrom_reader = ant_reader.fetch(scaffold)
+            for record in tqdm(chrom_reader, desc=f'{scaffold}_{ant}'):
+                if record.split('\t')[idx] == '1':
+                    lookup += '1'
+                else:
+                    lookup += '0'
+
+            out_dict['scaffold'] = scaffold
+            out_dict['annotation'] = ant
+            out_dict['genome_count'] = lookup.count('1')
+
+            callables_reader = pysam.TabixFile('data/rate/all_callable.tsv.gz')
+            out_dict['sample_count'] = len(callables_reader.header[0].split('\t')) - 2 # ignore chrom/pos cols
+            callables_chrom = callables_reader.fetch(scaffold)
+
+            callables_count = 0
+            for i, record in tqdm(enumerate(callables_chrom), desc=f'{scaffold}_{ant}_callables'):
+                if lookup[i] == '1':
+                    record = record.split('\t')[2:]
+                    callables_count += record.count('1')
+                else:
+                    continue
+            out_dict['callable_total'] = callables_count
+            writer.writerow(out_dict)
+```
+
+not to mention the sample-specific annotations, which will take a full day instead of just
+the two hours - will queue these up as well:
+
+```python
+# from Aug 1
+with open('data/rate/annotation_callables_samples.tsv', 'w') as f:
+    fieldnames = ['sample', 'scaffold', 'annotation', 'genome_count', 'callable_total', 'sample_count']
+    writer = csv.DictWriter(f, delimiter='\t', fieldnames=fieldnames)
+    writer.writeheader()
+
+    samples = pysam.TabixFile('data/rate/all_callable.tsv.gz').header[0].split('\t')[2:]
+
+    for ant in annotations:
+        for scaffold in scaffolds:
+            out_dict = {}
+
+            ant_reader = pysam.TabixFile('data/references/annotation_table.txt.gz')
+            header = ant_reader.header[-1].split('\t')
+            idx = header.index(ant)
+
+            lookup = ''
+            chrom_reader = ant_reader.fetch(scaffold)
+            for record in tqdm(chrom_reader, desc=f'{scaffold}_{ant}'):
+                if record.split('\t')[idx] == '1':
+                    lookup += '1'
+                else:
+                    lookup += '0'
+
+            for sample in tqdm(samples, desc=f'samples_{scaffold}_{ant}'):
+                out_dict['sample'] = sample
+                out_dict['scaffold'] = scaffold
+                out_dict['annotation'] = ant
+                out_dict['genome_count'] = lookup.count('1')
+
+                callables_reader = pysam.TabixFile('data/rate/all_callable.tsv.gz')
+                out_dict['sample_count'] = len(callables_reader.header[0].split('\t')) - 2 # ignore chrom/pos cols
+                callables_chrom = callables_reader.fetch(scaffold)
+                sample_idx = samples.index(sample)
+
+                callables_count = 0
+                for i, record in tqdm(enumerate(callables_chrom), desc=f'{scaffold}_{ant}_callables'):
+                    if lookup[i] == '1':
+                        record = record.split('\t')[2:][sample_idx]
+                        callables_count += record.count('1')
+                    else:
+                        continue
+                out_dict['callable_total'] = callables_count
+                writer.writerow(out_dict)
+                print(datetime.now())
+```
+
+once this is done, it'll be back to `annotations.Rmd` to redo the annotations
+analyses with updated callables - in addition to correcting the adaptation mutation set issues
+
+and, of course, the Perrineau-specific annotation callables:
+
+```python
+import csv
+import gffutils
+from tqdm import tqdm
+import pysam
+
+annotations = ['intronic', 'utr5', 'utr3', 'CDS'] # don't need intergenic here
+
+# expressed genes
+db = gffutils.FeatureDB('data/rate/gene_lists/perrineau_genes.db', keep_order=True)
+total_genes = len([gene for gene in db.all_features()])
+
+with open('data/rate/gene_lists/perrineau_annotation_callables.tsv', 'w') as f:
+    fieldnames = ['sample_factor', 'gene_name', 'scaffold', 'start',
+        'end', 'annotation', 'count']
+    writer = csv.DictWriter(f, delimiter='\t', fieldnames=fieldnames)
+    writer.writeheader()
+
+    ant_reader = pysam.TabixFile('data/references/annotation_table.txt.gz')
+    annotation_header = ant_reader.header[-1].split('\t')
+
+    callables_table = pysam.TabixFile('data/rate/all_callable.tsv.gz')
+    samples = callables_table.header[0].split('\t')[2:]
+    sample_groups = {
+        'CC_0': [i for i, s in enumerate(samples) if s.startswith('CC') and s.endswith('0')],
+        'CC_5': [i for i, s in enumerate(samples) if s.startswith('CC') and s.endswith('5')],
+        'DL_0': [i for i, s in enumerate(samples) if s.startswith('DL') and s.endswith('0')],
+        'DL_5': [i for i, s in enumerate(samples) if s.startswith('DL') and s.endswith('5')],
+        'SL_0': [i for i, s in enumerate(samples) if s.startswith('SL') and s.endswith('0')],
+        'SL_5': [i for i, s in enumerate(samples) if s.startswith('SL') and s.endswith('5')]
+        }
+
+    for gene in tqdm(db.all_features(), desc='genes', total=total_genes):
+        scaffold, start, end = gene.chrom, gene.start, gene.end
+
+        for ant in annotations:
+            ant_idx = annotation_header.index(ant)
+            lookup = ''
+            for record in ant_reader.fetch(scaffold, start, end):
+                if record.split('\t')[ant_idx] == '1':
+                    lookup += '1'
+                else:
+                    lookup += '0'
+            
+            for sample_group in sample_groups.keys():
+                idx_list = sample_groups[sample_group]
+                callables_count = 0
+                callables_region = callables_table.fetch(scaffold, start, end)
+                for i, record in enumerate(callables_region):
+                    if lookup[i] == '1':
+                        record = [c for i, c in enumerate(record.split('\t')[2:]) if i in idx_list]
+                        callables_count += record.count('1')
+                    else:
+                        continue
+                out_dict = {
+                    'sample_factor': sample_group, 'gene_name': gene.attributes['ID'],
+                    'scaffold': scaffold, 'start': start, 'end': end,
+                    'annotation': ant, 'count': callables_count}
+                writer.writerow(out_dict)
+```
+
+## 16/12/2021
+
+the sample specific callables are still running, but in the meantime I can
+at least update the Perrineau callables:
+
+
+```R
+library(tidyverse)
+
+# in data/rate/gene_lists
+perrineau = read_tsv('perrineau_annotation_callables.tsv', col_types = cols())
+
+perrineau_summarised = perrineau %>%
+    group_by(sample_factor, annotation) %>%
+    summarise(callables_total = sum(count))
+
+write_tsv(perrineau_summarised, 'perrineau_callables_summarised.tsv')
+```

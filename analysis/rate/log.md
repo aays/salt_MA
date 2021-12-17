@@ -1369,13 +1369,28 @@ time python analysis/rate/callable_sites.py \
 --out data/rate/all_callable_v4.tsv
 ```
 
-and once this is done
+and now for indel rates:
 
 ```bash
-# in data/rate
-bgzip all_callable.tsv
-tabix -p vcf all_callable.tsv.gz
+time python analysis/rate/calculate_rate.py \
+--mut_table data/rate/mut_describer/indels_described.gene_sets.tsv \
+--callables_table data/rate/all_callable.tsv.gz \
+--vcf data/alignments/genotyping/UG/pairs/CC1373_samples.vcf.gz \
+--generation_file data/rate/generation_time_final.tsv \
+--out data/rate/saltMA_indel_rate_final.tsv
 ```
 
+## 15/12/2021
 
+of course - I have to redo the callables for SNMs _again_ too
+now that the callable site lookup has been regenerated
+
+```bash
+time python analysis/rate/calculate_rate.py \
+--mut_table data/rate/mut_describer/muts_described.final.tsv \
+--callables_table data/rate/all_callable.tsv.gz \
+--vcf data/alignments/genotyping/UG/pairs/CC1373_samples.vcf.gz \
+--generation_file data/rate/generation_time_final.tsv \
+--out data/rate/saltMA_SNM_rate_final.tsv
+```
 
