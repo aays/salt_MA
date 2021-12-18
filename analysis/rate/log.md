@@ -1404,3 +1404,46 @@ time python analysis/rate/calculate_rate.py \
 --out data/rate/saltMA_SNM_rate_final.tsv
 ```
 
+## 17/12/2021
+
+of course - need to regenerate a few more callables files for the `ka_ks` analysis
+
+```bash
+# degeneracy callables lookup - genome wide
+time python analysis/rate/callable_sites_degeneracy.py \
+--callables_table data/rate/all_callable.tsv.gz \
+--annotation_table data/references/annotation_table.txt.gz \
+--outname data/rate/ka_ks/degen_callables_lookup.tsv
+
+# callables for perrineau genes
+time python analysis/rate/callable_genes_degeneracy.py \
+--callables_table data/rate/all_callable.tsv.gz \
+--gff data/rate/gene_lists/perrineau_genes.gff3 \
+--annotation_table data/references/annotation_table.txt.gz \
+--outname data/rate/ka_ks/syn_nonsyn_perrineau_callables.tsv
+
+# counts of S and NS mutations - now that the salt MA dataset has been updated
+time python analysis/rate/syn_mut_count.py \
+--mut_table data/mutations/mut_describer/muts_described.final.tsv \
+--out data/rate/ka_ks/syn_nonsyn_counts_genomewide.tsv
+
+# and for perrineau specifically
+time python analysis/rate/syn_mut_count.py \
+--mut_table data/mutations/mut_describer/muts_described.final.tsv \
+--gene_file data/rate/gene_lists/perrineau_genes_only.txt \
+--out data/rate/ka_ks/syn_nonsyn_perrineau_counts.tsv
+```
+
+creating `all_genome.tsv` again:
+
+```R
+# in data/rate/ka_ks
+library(tidyverse)
+
+counts = read_tsv('syn_nonsyn_counts_genome.tsv', col_types = cols())
+callables = read_tsv('degen_callables_lookup.tsv', col_types = cols())
+
+final = left_join(counts, callables, by = c('sample', 'scaffold'))
+
+write_tsv(final, 'all_genome.tsv')
+```
