@@ -1369,16 +1369,6 @@ time python analysis/rate/callable_sites.py \
 --out data/rate/all_callable_v4.tsv
 ```
 
-## 10/12/2021
-
-took 2 hours as expected - trying this again:
-
-```bash
-# in data/rate
-bgzip all_callable.tsv
-tabix -p vcf all_callable.tsv.gz
-```
-
 and now for indel rates:
 
 ```bash
