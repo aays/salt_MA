@@ -757,18 +757,18 @@ palette = wes_palette(7, name = 'Darjeeling1', type = 'continuous')
 
 # relevel
 ka_ks_all_plot = ka_ks_final %>% 
+  filter(genes != 'expressed genes', selection != 'salt 0') %>% 
   mutate(
     genes = fct_relevel(
-      genes, c('genome wide', 'expressed genes', 'salt genes'))) %>% 
+      genes, c('genome wide', 'salt genes'))) %>% 
   mutate(
     selection = case_when(
-      selection == 'salt 0' ~ 'Salt MA (control)',
-      selection == 'salt 5' ~ 'Salt MA (salt)',
+      selection == 'salt 5' ~ 'Salt MA',
       selection == 'MA' ~ 'MA lines',
       selection == 'salt-selection' ~ 'HS lines')) %>% 
   mutate(
     selection = fct_relevel(
-      selection, c('MA lines', 'HS lines', 'Salt MA (control)', 'Salt MA (salt)'))) %>% 
+      selection, c('MA lines', 'HS lines', 'Salt MA'))) %>% 
   
   # plot
   ggplot(
@@ -814,10 +814,10 @@ ka_ks_all_plot = ka_ks_final %>%
     axis.text.x = element_text(angle = 45, hjust = 1)
   ) +
   scale_fill_manual(
-    values = palette[c(3, 4, 6, 7)]
+    values = palette[c(3, 4, 7)]
   ) +
   scale_y_continuous(
-    breaks = seq(0, 3, 0.5)
+    breaks = seq(0, 5, 0.5)
   )
 
 ka_ks_all_plot
