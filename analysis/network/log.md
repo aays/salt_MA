@@ -817,4 +817,53 @@ mixotrophic network anyways, so let's just work with that for now
 going to download the hetero and mixo lookups and look at the growth ratios of
 mutated salt genes in R
 
+## 16/12/2021
 
+alright, back to finalizing shortest path stuff - this needs to be done with replacement,
+with nodes drawn from the full network to generate a null expectation
+
+I need to update the mutated gene list for the adaptation dataset since we've since
+removed a few of those mutations in that supposedly 'hypermutated' gene
+
+remaking the gene list and all x all shortest path matrix (from Oct 19)
+
+```python
+with open('data/network/gene_lists/adaptation_gene_list.txt', 'w') as f_out:
+    with open('data/rate/mut_describer/adaptation.gene_sets.filtered.tsv', 'r') as f_in:
+        reader = csv.DictReader(f_in, delimiter='\t')
+        writer = csv.DictWriter(f_out, delimiter='\t', fieldnames=['gene'])
+        for record in tqdm(reader):
+            feature_names = str(record['Gene.primaryIdentifier']) 
+            if feature_names and not feature_names == 'n/a':
+                line = {'gene': feature_names}
+                writer.writerow(line)
+```
+
+and now for the matrix:
+
+```bash
+time python analysis/network/shortest_path.py \
+data/network/chlamyNET.gml data/network/gene_lists/adaptation_gene_list.txt 1 \
+--distances -o data/network/matrices/adaptation.tsv
+```
+
+next up - review resamples script _in detail_ and make sure analysis is being
+done as expected before finalizing
+
+## 19/12/2021
+
+today - finalizing the shortest path analysis - if there are n mutations in the
+adaptation, including duplicates, then I need to resample n nodes with
+replacement from the full network - updating `shortest_path_resamples.py` accordingly
+
+I have an all x all that includes duplicates - which is fine - I can filter those if we decide to
+
+now to resample from the full network 100 times -
+
+```bash
+time python analysis/network/shortest_path_resamples.py \
+--treatment data/network/gene_lists/adaptation_gene_list.txt \
+--gml data/network/chlamyNET.gml \
+--replicates 100 \
+--out data/network/resamples/chlamynet_full_resample_100_replacement.tsv
+```

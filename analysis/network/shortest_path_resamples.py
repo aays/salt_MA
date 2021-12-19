@@ -43,8 +43,8 @@ def parse_gene_lists(fname, treatment, G):
 
     Returns
     -------
-    list(set(treatment_genes)) : list
-        list of unique genes from treatment fname
+    list(treatment_genes) : list
+        list of non-unique genes from treatment fname
     list(set(ma_genes)) : list
         list of unique genes to resample from
     """
@@ -69,9 +69,9 @@ def parse_gene_lists(fname, treatment, G):
     elif not fname:
         ma_genes = list(G.nodes)
 
-    print(f'[saltMA] resampling {len(set(treatment_genes))} nodes from {len(ma_genes)} total genes')
+    print(f'[saltMA] resampling {len(treatment_genes)} nodes from {len(ma_genes)} total genes')
 
-    return list(set(treatment_genes)), list(set(ma_genes))
+    return list(treatment_genes), list(set(ma_genes))
 
 def resample_nodes(G, ma_genes, replicate_size, iteration):
     """For a given iteration, resample nodes and get min path per node
@@ -178,10 +178,8 @@ def perform_draws(fname, treatment, gml, replicates, out):
                     'sample_path': sample_path
                     }
                 writer.writerow(out_dict)
+
                 
-            
-
-
 def main():
     fname, treatment, gml, replicates, out = args()
     perform_draws(*args())
