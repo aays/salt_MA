@@ -1,0 +1,464 @@
+---
+title: "Shortest path analysis"
+author: Ahmed Hasan
+output: pdf_notebook
+---
+
+# Package import
+
+```{r}
+library(tidyverse)
+library(here)
+library(fs)
+library(boot)
+library(tictoc)
+library(patchwork)
+library(wesanderson)
+```
+
+# Data import
+
+```{r}
+ma_orig = read_tsv(
+  here('data/network/matrices/MA_orig_light.tsv'),
+  col_types = cols()
+) %>% 
+  mutate(type = 'ma')
+
+adaptation = read_tsv(
+  here('data/network/matrices/adaptation.tsv'),
+  col_types = cols()
+) %>% 
+  mutate(type = 'adaptation')
+
+salt = read_tsv(
+  here('data/network/matrices/saltMA_5_replacement.tsv'),
+  col_types = cols()
+) %>% 
+  mutate(type = 'saltMA')
+```
+
+Get min paths, combine with mut describer output, then set shortest paths of repeat genes to 1:
+
+```{r}
+adaptation_muts = read_tsv(
+  here('data/rate/mut_describer/adaptation.gene_sets.filtered.tsv'),
+  col_types = cols()
+) %>% 
+  filter(genic == 1) %>% 
+  select(gene = Gene.primaryIdentifier, chromosome) %>% 
+  left_join(
+    adaptation %>% 
+      bind_rows(adaptation %>% rename(gene1 = gene2, gene2 = gene1)) %>% # double to make sure all genes included
+      select(gene = gene1, shortest_path) %>% 
+      distinct() %>% 
+      group_by(gene) %>% 
+      mutate(min_shortest_path = min(shortest_path)) %>% 
+      filter(shortest_path == min_shortest_path),
+    by = c('gene')
+  ) %>% 
+  select(-shortest_path) %>% 
+  filter(!is.na(min_shortest_path))
+
+ma_muts = read_tsv(
+  here('data/rate/mut_describer/ma.gene_sets.tsv'),
+  col_types = cols()
+) %>% 
+  filter(genic == 1) %>% 
+  select(chromosome, feature_names) %>% 
+  mutate(
+    gene = str_match(feature_names, "^\\[\\'([A-Za-z\\.0-9]+)")[, 2] # lol
+  ) %>% 
+  select(chromosome, gene) %>% 
+  left_join(
+    ma_orig %>% 
+      bind_rows(adaptation %>% rename(gene1 = gene2, gene2 = gene1)) %>% 
+      select(gene = gene1, shortest_path) %>% 
+      distinct() %>% 
+      group_by(gene) %>% 
+      mutate(min_shortest_path = min(shortest_path)) %>% 
+      filter(shortest_path == min_shortest_path),
+    by = c('gene')
+  ) %>% 
+  select(-shortest_path) %>% 
+  filter(!is.na(min_shortest_path))
+
+salt_ma_muts = read_tsv(
+  here('data/rate/mut_describer/muts_described.final.gene_sets.tsv'),
+  col_types = cols()
+) %>% 
+  bind_rows(
+    read_tsv(
+      here('data/rate/mut_describer/indels_described.gene_sets.tsv'), col_types = cols()
+    ) %>% 
+      mutate(mut_codon = as.character(mut_codon),
+             rho = as.character(rho)) # column type incompatibilities
+  ) %>% 
+  mutate(sample_type = str_extract(mutant_sample, '[05]$')) %>% 
+  filter(genic == 1, sample_type == 5) %>% 
+  select(chromosome, feature_names) %>% 
+  mutate(
+    gene = str_match(feature_names, "^\\[\\'([A-Za-z\\.0-9]+)")[, 2] # lol
+  ) %>% 
+  select(-feature_names) %>% 
+  left_join(
+    salt %>% 
+      bind_rows(adaptation %>% rename(gene1 = gene2, gene2 = gene1)) %>% 
+      select(gene = gene1, shortest_path) %>% 
+      distinct() %>% 
+      group_by(gene) %>% 
+      mutate(min_shortest_path = min(shortest_path)) %>% 
+      filter(shortest_path == min_shortest_path),
+    by = c('gene')
+  ) %>% 
+  select(-shortest_path) %>% 
+  filter(!is.na(min_shortest_path))
+  
+```
+
+Combining these into lists:
+
+```{r}
+networks = list(
+  'ma_orig' = ma_orig,
+  'adaptation' = adaptation,
+  'salt' = salt
+) %>% 
+  map(
+    ~ select(., type, gene1, gene2, shortest_path)
+  )
+
+muts_all = list(
+  'ma_orig' = ma_muts %>% mutate(type = 'ma'),
+  'adaptation' = adaptation_muts %>% mutate(type = 'adaptation'),
+  'salt' = salt_ma_muts %>% mutate(type = 'salt')
+)
+```
+
+Loading in resamples:
+
+```{r}
+ma_resamples = read_tsv(
+  here('data/network/resamples/ma_resample_100.tsv'),
+  col_types = cols()
+)
+
+all_resamples = read_tsv(
+  here('data/network/resamples/chlamynet_full_resample_100_replacement.tsv'),
+  col_types = cols()
+)
+```
+
+# Data exploration
+
+What are the distributions of shortest paths across these three datasets?
+
+```{r}
+# all x all
+networks %>% 
+  map(
+    ~ ggplot(., aes(x = shortest_path)) +
+      geom_histogram(binwidth = 1, fill = 'light blue', color = 'black') +
+      ggtitle(label = unique(.$type)) +
+      coord_cartesian(x = c(0, 20)) +
+      theme_classic()
+  )
+
+# min paths with number of mutations factored in
+muts_all %>% 
+  map(
+    ~ ggplot(., aes(x = min_shortest_path)) +
+      geom_histogram(binwidth = 1, fill = 'steel blue', color = 'black') +
+      ggtitle(label = unique(.$type)) +
+      coord_cartesian(x = c(0, 20)) +
+      theme_classic()
+  )
+```
+
+Putting these together in a single plot:
+
+```{r}
+# all x all
+network_means = networks %>% 
+  map_dfr(~ group_by(., type) %>% 
+            summarise(., mean_shortest_path = mean(shortest_path)))
+
+networks %>% 
+  bind_rows() %>% 
+  
+  ggplot(aes(x = shortest_path)) +
+  geom_histogram(
+    binwidth = 1,
+    fill = 'steelblue',
+    color = 'black'
+  ) +
+  coord_cartesian(
+    x = c(0, 20)
+  ) +
+  facet_wrap(
+    ~ type, scales = 'free_y', 
+    nrow = 3, ncol = 1) +
+  geom_vline(
+    data = network_means,
+    aes(xintercept = mean_shortest_path),
+    size = 1.5,
+    color = 'red',
+    linetype = 'dotdash'
+  )
+```
+
+Doing this for the min paths:
+
+```{r}
+network_min_means = muts_all %>% 
+  map_dfr(~ group_by(., type) %>% 
+            summarise(., mean_min_path = mean(min_shortest_path)))
+
+muts_all %>% 
+  bind_rows() %>% 
+  
+  ggplot(aes(x = min_shortest_path)) +
+  geom_histogram(
+    binwidth = 1,
+    fill = 'steelblue',
+    color = 'black'
+  ) +
+  coord_cartesian(
+    x = c(0, 20)
+  ) +
+  facet_wrap(
+    ~ type, scales = 'free_y',
+    nrow = 3, ncol = 1
+  ) +
+  geom_vline(
+    data = network_min_means,
+    aes(xintercept = mean_min_path),
+    size = 1.5,
+    color = 'red',
+    linetype = 'dotdash'
+  )
+```
+
+
+Getting some summary statistics:
+
+```{r}
+networks %>% 
+  map(~ summary(.))
+```
+
+## Paring down data to minimum shortest paths
+
+```{r}
+networks %>% 
+  map(~ group_by(., gene1) %>% 
+        mutate(min_shortest_path = min(shortest_path)) %>% 
+        filter(shortest_path == min_shortest_path)) %>%  # preserves ties
+  bind_rows() %>% 
+  
+  # plot distributions
+  ggplot(aes(x = shortest_path)) +
+  geom_histogram(
+    binwidth = 1,
+    fill = 'steelblue',
+    color = 'black'
+  ) +
+  coord_cartesian(
+    x = c(0, 20)
+  ) +
+  facet_wrap(
+    ~ type, scales = 'free_y', 
+    nrow = 3, ncol = 1)
+```
+
+# Resampling
+
+```{r}
+networks_min_paths = networks %>% 
+  map(~ group_by(., gene1) %>% 
+        mutate(min_shortest_path = min(shortest_path)) %>% 
+        filter(shortest_path == min_shortest_path) %>% 
+        ungroup() %>% 
+        select(type, gene1, min_path = shortest_path))
+```
+
+Looking at distribution of MA resamples, stacked
+
+```{r}
+# looking at distribution of MA resamples, stacked
+
+ggplot(all_resamples, aes(x = min_path)) +
+  geom_histogram(
+    binwidth = 1,
+    color = 'black',
+    fill = 'steelblue') +
+  coord_cartesian(c(0, 20))
+```
+
+Plotting side by side with adaptation distribution:
+
+
+```{r}
+palette = wes_palette('Darjeeling1', 5, 'continuous')
+
+resample_dist_plot = bind_rows(
+  muts_all$adaptation %>% select(type, min_path = min_shortest_path) %>% mutate(type = 'HS genes'),
+  # ma_resamples %>% mutate(type = 'MA resamples') %>% select(type, min_path),
+  all_resamples %>% mutate(type = 'ChlamyNET resamples') %>% select(type, min_path)
+) %>% 
+  mutate(type = fct_relevel(type, c('HS genes', 'ChlamyNET resamples'))) %>% 
+  
+  # plot distributions
+  ggplot(aes(x = min_path - 1, fill = type)) +
+  geom_histogram(
+    binwidth = 1,
+    color = 'black'
+  ) +
+  coord_cartesian(
+    x = c(0, 20)
+  ) +
+  facet_wrap(
+    ~ type, scales = 'free_y', 
+    nrow = 3, ncol = 1) +
+  theme_classic() +
+  labs(
+    x = 'Minimum shortest path', 
+    y = 'Count',
+    tag = 'A') +
+  theme(
+    axis.title = element_text(family = 'Helvetica', size = 12, color = 'black'),
+    axis.text = element_text(family = 'Helvetica', size = 12, color = 'black'),
+    strip.text = element_text(family = 'Helvetica', size = 12, color = 'black'),
+    plot.tag = element_text(family = 'Helvetica', size = 12, face = 'bold'),
+    strip.background = element_blank()
+  ) +
+  scale_x_continuous(breaks = seq(0, 14, 1), labels = seq(0, 14, 1)) +
+  coord_cartesian(x = c(0, 9)) +
+  guides(fill = FALSE) +
+  scale_fill_manual(
+    values = c(
+      'HS genes' = palette[3],
+      'ChlamyNET resamples' = palette[2]
+    )
+  )
+
+resample_dist_plot
+```
+
+Redoing with position dodge:
+
+```{r}
+bind_rows(
+  muts_all$adaptation %>% select(type, min_path = min_shortest_path),
+  # ma_resamples %>% mutate(type = 'MA resamples') %>% select(type, min_path),
+  all_resamples %>% mutate(type = 'chlamynet resamples') %>% select(type, min_path)
+) %>% 
+  
+  # plot distributions
+  ggplot(aes(x = min_path, fill = type)) +
+  geom_histogram(
+    binwidth = 1,
+    color = 'black',
+    position = 'dodge'
+  ) +
+  coord_cartesian(
+    x = c(0, 20)
+  ) +
+  theme_classic() +
+  labs(x = 'Min shortest path', y = 'Count') +
+  theme(
+    axis.title = element_text(family = 'Helvetica', size = 12, color = 'black'),
+    axis.text = element_text(family = 'Helvetica', size = 12, color = 'black'),
+    strip.text = element_text(family = 'Helvetica', size = 12, color = 'black')
+  ) +
+  scale_x_continuous(breaks = seq(0, 14, 2), labels = seq(0, 14, 2)) +
+  coord_cartesian(x = c(0, 14))
+```
+
+
+Looking at a handful of chlamynet resamples:
+
+```{r}
+ggplot(all_resamples %>% filter(iteration < 21), aes(x = min_path)) +
+  geom_histogram(
+    binwidth = 1,
+    fill = 'steelblue',
+    color = 'black'
+  ) +
+  coord_cartesian(
+    x = c(0, 15)
+  ) +
+  facet_wrap(~ iteration)
+```
+
+Residual comparisons - 
+
+1. For a given replicate, calculate the difference in bin size for each bin vs adaptation
+2. Sum those diffs for an overall distribution difference
+
+```{r}
+adaptation_binned = muts_all$adaptation %>% 
+  rename(min_path = min_shortest_path) %>% 
+  group_by(min_path) %>% 
+  summarise(adaptation_count = n())
+
+all_resamples_binned = all_resamples %>% 
+  group_by(iteration, min_path) %>% 
+  summarise(random_count = n(), .groups = 'drop')
+
+# get bin size 
+resample_residuals = all_resamples_binned %>% 
+  
+  # join adaptation dataset - replace NAs with 0s
+  full_join(adaptation_binned, by = c('min_path')) %>% 
+  replace_na(list(random_count = 0, adaptation_count = 0)) %>% 
+  
+  # get differences and return a sum for each iteration
+  mutate(sq_diff = (random_count - adaptation_count)) %>% 
+  filter(!is.na(iteration))
+
+
+resample_residuals_summed = resample_residuals %>% 
+  group_by(iteration, min_path) %>% # group by iteration as well if doing stacked plot, remove if not
+  summarise(mean_sq_diff = mean(sq_diff), 
+            sum_sq_diff = sum(sq_diff),
+            min_sq_diff = min(sq_diff), 
+            max_sq_diff = max(sq_diff))
+  
+# plot
+residual_plot = resample_residuals_summed %>% 
+  ggplot(aes(x = min_path - 1, y = sum_sq_diff)) +
+  geom_bar(
+    stat = 'identity',
+    fill = 'steelblue'
+  ) +
+  # geom_errorbar(
+    # aes(ymin = min_sq_diff, ymax = max_sq_diff, width = 0.4)
+  # ) +
+  scale_x_continuous(breaks = seq(0, 10, 1)) +
+  scale_y_continuous(breaks = seq(-500, 750, 250)) +
+  theme_classic() +
+  labs(
+    x = 'Minimum shortest path', 
+    y = 'Random count - HS gene count',
+    tag = 'B') +
+  theme(
+    axis.title = element_text(family = 'Helvetica', size = 12, color = 'black'),
+    axis.text = element_text(family = 'Helvetica', size = 12, color = 'black'),
+    plot.tag = element_text(family = 'Helvetica', size = 12, face = 'bold')
+  ) +
+  geom_hline(yintercept = 0, linetype = 'dashed')
+
+residual_plot
+```
+
+Combine plots:
+
+```{r}
+network_fig = resample_dist_plot + residual_plot
+
+network_fig
+
+ggsave(here('plots/network.eps'), plot = network_fig, width = 6, height = 4)
+```
+

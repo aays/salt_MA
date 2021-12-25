@@ -100,7 +100,7 @@ get_metabolic_genes = function(d, metabolic) {
 ## Actual joins
 
 ```{r}
-salt_hetero = d$salt %>% 
+salt_hetero = d$adaptation %>% 
   get_metabolic_genes(., hetero) %>% 
   select(
     gene, chromosome, position, 
@@ -109,7 +109,7 @@ salt_hetero = d$salt %>%
     rename(hetero, metabolic_gene = gene),
     by = 'metabolic_gene')
 
-salt_mixo = d$salt %>% 
+salt_mixo = d$adaptation %>% 
   get_metabolic_genes(., mixo) %>% 
   select(
     gene, chromosome, position, 
