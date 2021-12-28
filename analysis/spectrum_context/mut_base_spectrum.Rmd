@@ -72,6 +72,22 @@ hs_callables_silent = read_tsv(
 ) %>% 
   collapse_callables()
 
+generations = read_tsv(
+  here('data/rate/saltMA_SNM_rate_final.tsv'), 
+  col_types = cols()
+  ) %>% 
+  mutate(
+    sample_group = str_extract(sample, '^[A-Z]{2}'),
+    sample_type = str_extract(sample, '[05]$'),
+    sample_factor = paste(sample_group, sample_type, sep = '_')
+  ) %>% 
+  mutate(
+    type = 'SNM'
+  ) %>% 
+  filter(sample_type == '5') %>% # only keep salt 5
+  select(sample_factor, generations) %>% 
+  summarise(mean_generations = mean(generations)) # 236
+
 ```
 
 # Mutational base spectrum
@@ -309,6 +325,8 @@ salt_group_rate = salt_group_table %>%
   )
 
 salt_group_rate
+
+# write_tsv(salt_group_rate, here('data/spectrum_context/saltMA_spectrum.tsv'))
 ```
 
 Summarised over 0 and 5:
@@ -331,10 +349,9 @@ salt_rate_summarised = salt_group_table %>%
   left_join(
     base_callables_summarised,
     by = c('sample_type', 'base')) %>% 
-  mutate(rate = count / (callables * 250)) # sample count is baked in
+  mutate(rate = count / (callables * 236)) # sample count is baked in
 
 salt_rate_summarised
-# TODO: update site gen count once actual generation count is in
 ```
 
 Original MA and adaptation:
@@ -404,14 +421,14 @@ rate_summarised$hs = make_final_count_table(count_table, hs_callables_long, 'ada
   mutate(callables = callables * 150) %>% 
   mutate(rate = count / callables)
 
-# salt MA - TODO, but currently setting to 250
+# salt MA - 236 gens on average across the 5 lines
 rate_summarised$salt_0 = make_final_count_table(
   count_table, 
   base_callables_summarised %>% 
     mutate(sample_factor = paste('salt', sample_type, sep = '_')) %>% 
     filter(sample_factor == 'salt_0') %>% 
     select(-sample_type) %>% 
-    mutate(callables = callables * 250), # TODO: replace with exact value
+    mutate(callables = callables * 236), 
   'salt_0')
 rate_summarised$salt_5 = make_final_count_table(
   count_table, 
@@ -419,7 +436,7 @@ rate_summarised$salt_5 = make_final_count_table(
     mutate(sample_factor = paste('salt', sample_type, sep = '_')) %>% 
     filter(sample_factor == 'salt_5') %>% 
     select(-sample_type) %>% 
-    mutate(callables = callables * 250), # TODO: replace with exact value
+    mutate(callables = callables * 236),
   'salt_5')
 
 rate_summarised
@@ -637,9 +654,6 @@ rate_summarised_cis = bind_rows(
   rate_summarised_cis, .id = 'sample_factor'
 ) %>% 
   mutate(
-    type = str_replace(type, '>', ' \u2192 ')
-  ) %>% 
-  mutate(
     sample_factor = case_when(
       sample_factor == 'hs' ~ 'HS lines',
       sample_factor == 'ma' ~ 'MA',
@@ -724,28 +738,39 @@ Create normalized plot (each bar divided by the average rate in that group)
 # need to transform both the data *and* the CIs
 # it'll be easiest to combine the CI data frame with the original data for this
 
+label_parse = function(breaks) {
+   parse(text = breaks)
+}
+
 rate_summarised_combined_clean = rate_summarised_combined %>% 
   filter(sample_factor != 'salt_0') %>% 
   mutate(
     sample_factor = case_when(
-      sample_factor == 'adaptation' ~ 'HS lines',
+      sample_factor == 'adaptation' ~ 'HS',
       sample_factor == 'ma' ~ 'MA',
-      sample_factor == 'salt_5' ~ 'MA in salt'
+      sample_factor == 'salt_5' ~ 'Salt MA'
     )) %>% 
-  mutate(
-    sample_factor = fct_relevel(sample_factor, 
-      c('MA', 'HS lines', 'MA in salt'))
-  ) %>% 
-  mutate(
-    type = str_replace(type, '>', ' \u2192 ')) %>% 
   
   # add CIs
   left_join(
-    rate_summarised_cis,
+    rate_summarised_cis %>% 
+      mutate(sample_factor = case_when(
+        sample_factor == 'HS lines' ~ 'HS',
+        sample_factor == 'MA in salt' ~ 'Salt MA',
+        sample_factor == 'MA' ~ 'MA'
+      )),
     by = c('sample_factor', 'type')
   ) %>% 
   
+  # reorder
+  mutate(
+    sample_factor = fct_relevel(sample_factor, 
+      c('MA', 'HS', 'Salt MA'))
+  ) %>% 
+  
   # select necessary columns and do transformation
+  mutate(
+    type = str_replace(type, '>', '  %->% ')) %>% 
   select(
     sample_factor, type, base, rate, conf.low, conf.high
   ) %>% 
@@ -773,11 +798,11 @@ spectrum_rate_plot_relative = ggplot(rate_summarised_combined_clean, aes(fill = 
   ) +
   theme_classic() +
   labs(
-    x = 'Base change type',
-    y = 'Observed over expected'
+    x = 'Mutation',
+    y = 'Observed / Expected'
   ) +
   theme(
-    axis.text = element_text(size = 12, color = 'black'),
+    axis.text = element_text(size = 12, color = 'black', family = 'Helvetica'),
     axis.title = element_text(size = 12, color = 'black'),
     legend.title = element_blank(),
     # legend.position = c(0.2, 0.88),
@@ -788,15 +813,17 @@ spectrum_rate_plot_relative = ggplot(rate_summarised_combined_clean, aes(fill = 
   guides(
     fill = guide_legend(ncol = 3, nrow = 2)
   ) +
-  scale_fill_manual(values = wes_palette(4, name = 'Darjeeling1', type = 'continuous')[2:4]) +
+  scale_fill_manual(values = wes_palette(5, name = 'Darjeeling1', type = 'continuous')[c(1, 3, 5)]) +
   coord_cartesian(
     y = c(0, 2)
   ) +
-  geom_hline(yintercept = 1, linetype = 'dashed')
+  geom_hline(yintercept = 1, linetype = 'dashed') +
+  guides(fill = guide_legend(nrow = 1, ncol = 3)) +
+  scale_x_discrete(labels = label_parse)
 
 spectrum_rate_plot_relative
 
-# ggsave(here('plots/spectrum_rate_plot_rel.svg'), plot = spectrum_rate_plot_relative, width = 8, height = 4)
+ggsave(here('plots/spectrum_rate_plot_rel.eps'), plot = spectrum_rate_plot_relative, width = 8, height = 4)
 ```
 
 
@@ -821,7 +848,7 @@ rate_summarised_combined %>%
   mutate(
     type = str_replace(type, '>', ' \u2192 ')) %>% 
   mutate(
-    rate = ifelse(sample_factor != 'MA', rate / 250, rate)
+    rate = ifelse(sample_factor != 'MA', rate / 236, rate)
   ) %>% 
   
 ggplot(
@@ -1020,11 +1047,17 @@ adaptation_nonsilent_values = get_eq_gc(
   adaptation_silent_nonsilent %>% 
     filter(site_type == 'nonsilent'), 
   values = TRUE)
+adaptation_all_values = get_eq_gc(
+  adaptation_silent_nonsilent,
+  values = TRUE
+)
 
 message('adaptation silent')
 as.numeric(adaptation_silent_values['n_sw'] / adaptation_silent_values['n_ws']) # silent - 3.65
 message('adaptation nonsilent')
 as.numeric(adaptation_nonsilent_values['n_sw'] / adaptation_silent_values['n_ws']) # nonsilent - 3.75
+message('adaptation all')
+as.numeric(adaptation_all_values['n_sw'] / adaptation_all_values['n_ws']) # all - 3.06
 
 # salt ma - across both types
 map(
@@ -1106,7 +1139,7 @@ salt_list = salt %>% split(.$sample_type)
 
 d_list = append(d_list, salt_list)
 
-map_dfr(
+ts_tv_all = map_dfr(
   d_list,
   function(d) {
     vals = ts_tv(d, values = TRUE)
@@ -1120,37 +1153,45 @@ map_dfr(
   .id = 'sample_factor'
 )
 
+ts_tv_all
 
 ```
 
+Comparing Ts/Tv across groups:
 
+```{r}
+message('MA vs HS')
+fisher.test(
+  rbind(
+    ts_tv(ma, values = TRUE),
+    ts_tv(adaptation, values = TRUE)
+  )
+)
 
+message('HS vs Salt MA')
+fisher.test(
+  rbind(
+    ts_tv(adaptation, values = TRUE),
+    ts_tv(salt %>% filter(sample_type == '5'), values = TRUE)
+  )
+)
 
+message('MA vs Salt MA')
+fisher.test(
+  rbind(
+    ts_tv(ma, values = TRUE),
+    ts_tv(salt %>% filter(sample_type == '5'), values = TRUE)
+  )
+)
+```
 
+Proportion of C>T over other mut types:
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+```{r}
+count_table %>% 
+  group_by(name) %>% 
+  mutate(total = sum(count)) %>% 
+  filter(type == 'C>T') %>% 
+  mutate(CT_prop = count / total)
+```
 
