@@ -15,6 +15,8 @@ library(wesanderson)
 
 # Data import
 
+Salt MA: 
+
 ```{r}
 snp_rate = read_tsv(
   here('data/rate/saltMA_SNM_rate_final.tsv'), 
@@ -45,7 +47,7 @@ indel_rate = read_tsv(
   filter(sample_type == '5')
 
 salt_all = bind_rows( # combined mutations, SNM + indel
-  snp_rate, indel_rate
+  snp_rate, indel_rate # remove either from this line to get the individual mut rate below
 ) %>% 
   select(-type, -mut_rate) %>% 
   group_by(sample, chrom) %>% 
@@ -87,6 +89,26 @@ salt_rate = bind_rows(
   arrange(sample, chrom) %>% 
   ungroup()
 ```
+
+Adaptation indels:
+
+```{r}
+hs_indels = read_tsv(
+  here('data/rate/adaptation_indel_rate_final.tsv'),
+  col_types = cols()
+)
+
+# overall indel rate
+hs_indels %>% 
+  summarise(
+    mutations = sum(mutations),
+    total_callable_sites = sum(total_callable_sites)
+  ) %>% 
+  mutate(
+    mut_rate = mutations / (total_callable_sites * 150)
+  )
+```
+
 
 # Rate values
 

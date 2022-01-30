@@ -1447,3 +1447,70 @@ final = left_join(counts, callables, by = c('sample', 'scaffold'))
 
 write_tsv(final, 'all_genome.tsv')
 ```
+
+## 30/1/2022
+
+getting indel rate for HS lines:
+
+```bash
+# in data/rate/mut_describer
+head -n 1 adaptation.gene_sets.filtered.tsv > adaptation.indels.tsv
+grep 'indel' adaptation.gene_sets.filtered.tsv >> adaptation.indels.tsv
+```
+
+can't run the `calculate_rate` script cause that would require a callables table,
+which itself would require a set of gvcfs (and those were never made for the original
+adaptation genotyping)
+
+might work with the `data/prev/summary_callable_sites.csv` file directly for this - 
+need to still just generate a file along the lines of:
+
+```
+sample mutations total_callable_sites generations mut_rate
+```
+
+in a console:
+
+```python
+import csv
+from tqdm import tqdm
+
+callables = {}
+with open('data/prev/summary_callable_sites.csv', 'r') as f:
+    rows = [line for line in csv.DictReader(f)]
+    to_remove = ['exonic', 'fold0', 'fold2', 'fold3', 'fold4', 'genic']
+    for row in rows:
+        for key in to_remove:
+            _ = row.pop(key)
+        line = row.pop('line')
+        callables[line] = sum(int(n) for n in row.values())
+
+# get indels
+indel_counts = {k: 0 for k in callables.keys()}
+# include shared muts
+indel_counts['SL1'] = 0 # there are 2 SL1 indels, and none in SL2
+indel_counts['SL2'] = 0
+
+with open('data/rate/mut_describer/adaptation.indels.tsv', 'r') as f:
+    reader = csv.DictReader(f, delimiter='\t')
+    for line in reader:
+        line = line['mutant_sample'].lstrip('./').rstrip('/')
+        indel_counts[line] += 1
+
+# create outfile
+with open('data/rate/adaptation_indel_rate_final.tsv', 'w') as f:
+    fieldnames = ['sample', 'mutations', 'total_callable_sites', 'generations', 'mut_rate']
+    writer = csv.DictWriter(f, delimiter='\t', fieldnames=fieldnames)
+    writer.writeheader()
+    for line in callables.keys():
+        d = {
+            'sample': line,
+            'mutations': indel_counts[line],
+            'total_callable_sites': callables[line],
+            'generations': 150
+            }
+        d['mut_rate'] = d['mutations'] / (d['total_callable_sites'] * d['generations'])
+        writer.writerow(d)
+
+```
+
