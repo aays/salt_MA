@@ -867,3 +867,19 @@ time python analysis/network/shortest_path_resamples.py \
 --replicates 100 \
 --out data/network/resamples/chlamynet_full_resample_100_replacement.tsv
 ```
+
+## 23/12/2021
+
+what do all x all matrices look like for MA and salt MA if replacement is allowed? 
+
+```bash
+time python analysis/network/shortest_path.py \
+data/network/chlamyNET.gml data/network/gene_lists/MA_orig_gene_list.txt 1 \
+--distances -o data/network/matrices/MA_replacement.tsv
+
+time python analysis/network/shortest_path.py \
+data/network/chlamyNET.gml data/network/gene_lists/saltMA_5_gene_list.txt 1 \
+--distances -o data/network/matrices/saltMA_5_replacement.tsv
+```
+
+

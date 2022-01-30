@@ -2228,5 +2228,74 @@ anti_join(d_new, d_old, by = c('chrom', 'pos')) # returns nothing!
 # d_new is a subset of d_old
 ```
 
+## 29/1/2022
+
+grabbing the coverage from the raw FASTQ files with a quick and dirty grep:
+
+```bash
+# in data/alignments/fastq/symlinks
+for fname in *fq.gz;
+    do linecount=$(zgrep -c '^@' ${fname})
+    echo -n ${fname}, >> readcounts.csv
+    echo ${linecount} >> readcounts.csv
+done
+```
+
+it does occur to me that I only really needed to do one file per sample
+since they're paired reads, but ah well
+
+getting the average coverage per read:
+
+```python
+import csv
+with open('readcounts.csv', 'r') as f:
+    lines = [line for line in csv.reader(f) if '_5_1' in line[0]]
+samples = len(lines)
+total_reads = sum(int(line[1]) for line in lines)
+
+coverage = (2 * total_reads * 150) / (samples * 110e6) # 24.54
+```
+
+getting the amount of sequence sequenced per line:
+
+```bash
+# in data/alignments
+mkdir coverage/
+
+time for fname in bam/*5.bam; do
+    echo ${fname}
+    outname=$( basename ${fname} .bam)
+    time samtools coverage -o coverage/${outname}.tsv ${fname}
+done
+```
+
+getting summary stats for the ms:
+
+```python
+# in data/alignments/
+import csv
+from glob import glob
+
+fnames = glob('coverage/*')
+coverages = {}
+
+for fname in fnames:
+    with open(fname, 'r') as f:
+        sample = os.path.basename(fname).rstrip('_5.tsv')
+        reader = csv.DictReader(f, delimiter='\t')
+        coverages[sample] = {}
+        for line in reader:
+            chrom = line['#rname']
+            if chrom.startswith('chromosome'):
+                coverages[sample][chrom] = int(line['covbases'])
+
+# mean sequenced per line
+totals = sorted([sum(coverages[sample].values()) for sample in coverages])
+sum(totals) / len(totals) # 100219300
+min(totals) # 94853211
+max(totals) # 104273023
+```
+
+
 
 
