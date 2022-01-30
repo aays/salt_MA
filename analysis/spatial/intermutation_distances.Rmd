@@ -12,6 +12,7 @@ library(fs)
 library(here)
 library(wesanderson)
 library(patchwork)
+library(broom)
 ```
 
 # Load in and clean data
@@ -43,7 +44,7 @@ muts_clean = muts_raw %>%
   
   # sort
   mutate(chrom_val = as.numeric(str_extract(chromosome, '[0-9]{1,2}$'))) %>% 
-  arrange(line, chrom_val, sample_group, position)
+  arrange(line, chrom_val, sample_group, position) 
 
 ma_original = read_tsv(
   here('data/spectrum_context/MA/final.curated_muts.coord_sorted.txt'),
@@ -57,11 +58,13 @@ splice_sites = data.frame(
   position = c(8771346, 2315498, 2122297, 1131421)
 )
 
-adaptation = read_csv(
-  here('data/prev/all_mutations_w_shared_hmmIBD_corrected_FPKM.csv'),
+adaptation = read_tsv(
+  # here('data/prev/all_mutations_w_shared_hmmIBD_corrected_FPKM.csv'),
   # here('data/prev/all_mutations.csv'),
+  here('data/rate/mut_describer/adaptation.gene_sets.filtered.tsv'),
   col_types = cols(), na = c('.')
-) %>% 
+) %>%
+  select(-cluster) %>% 
   # filter(type == 'SNP') %>% 
   # adding a silent/nonsilent column to the adaptation data frame
   mutate(site_type = case_when(
@@ -130,6 +133,8 @@ muts_line_group = muts_clean %>%
   ungroup()
 
 muts_line_group
+
+# write_tsv(muts_line_group, here('data/spatial/saltMA_intermut.tsv'))
 ```
 
 # Kolmogorov-Smirnov tests
@@ -211,9 +216,11 @@ ma_orig_distances = ma_original %>%
   group_by(chromosome) %>% 
   
   # get intermut distances
-  mutate(next_pos = lead(position)) %>% 
+  mutate(next_pos = lead(position),
+         prev_pos = lag(position)) %>% 
   # mutate(next_pos = ifelse(is.na(next_pos), lag(position), next_pos)) %>% 
   mutate(d = next_pos - position) %>% 
+  mutate(d = ifelse(is.na(d), position - prev_pos, d)) %>% 
   
   # remove 'outer boundary' muts
   # filter(!is.na(d)) %>% 
@@ -265,7 +272,6 @@ ks.test(
 ## Adaptation dataset
 
 ```{r}
-# prepping original MA dataset
 adaptation_distances = adaptation %>% 
   split(.$site_type) %>% 
   map(
@@ -285,6 +291,22 @@ adaptation_distances = adaptation %>%
 
 adaptation_silent = adaptation_distances$silent
 adaptation_nonsilent = adaptation_distances$nonsilent
+
+# combined
+adaptation_combined_distances = adaptation %>% 
+    select(chromosome, position, mutant_sample, site_type) %>% 
+    mutate(chrom_val = as.numeric(str_extract(chromosome, '[0-9]{1,2}$'))) %>% 
+    arrange(chrom_val, position) %>% 
+    group_by(chromosome) %>% 
+    
+    # get intermut distances
+    mutate(next_pos = lead(position),
+           prev_pos = lag(position)) %>% 
+    mutate(d = next_pos - position) %>% 
+    mutate(d = ifelse(is.na(d), position - prev_pos, d)) %>% # deal with 'outer boundary' muts
+    
+    ungroup()
+  
 ```
 
 Recreating the original Fig 4:
@@ -334,36 +356,138 @@ ks.test(
 )
 ```
 
+Comparisons with the full adaptation dataset:
+
+```{r}
+ks.test(
+  muts_line %>% filter(line == 0) %>% select(d) %>% unlist(),
+  adaptation_combined_distances$d
+)
+
+ks.test(
+  muts_line %>% filter(line == 5) %>% select(d) %>% unlist(),
+  adaptation_combined_distances$d
+)
+
+ks.test(
+  ma_orig_distances$d, adaptation_combined_distances$d
+)
+
+ks.test(
+  ma_orig_distances$d, 
+  muts_line %>% filter(line == 5) %>% select(d) %>% unlist()
+)
+
+```
+
+### Comparisons after downsampling to the adaptation dataset
+
+```{r}
+nrow(adaptation_combined_distances) # 238 mutations
+nrow(muts_line %>% filter(line == 5)) # 174 mutations
+nrow(ma_orig_distances) # 6798 muts
+```
+
+Need to downsample the other two mutation sets to 174 (salt 5 mut count)
+
+```{r}
+resample_ks_test = function(d1, d2, min_size = FALSE, verbose = TRUE) {
+  if (!min_size) {
+    n_muts = min(nrow(d1), nrow(d2))
+  } else {
+    n_muts = min_size
+  }
+  if (verbose == TRUE) {
+    message(paste('sampling down to', n_muts))
+  }
+  d1_sampled = sample(d1$d, size = n_muts, replace = FALSE)
+  d2_sampled = sample(d2$d, size = n_muts, replace = FALSE)
+  out = broom::tidy(
+    suppressWarnings(ks.test(d1_sampled, d2_sampled))
+  )
+  return(out)
+}
+
+resample_ks_test(
+  ma_orig_distances,
+  adaptation_combined_distances)
+```
+
+```{r}
+# repeat 100 times across the three datasets
+resampled_ks = list()
+
+# MA vs HS
+resampled_ks$ma_hs = map_dfr(
+  c(1:100),
+  ~ resample_ks_test(
+    ma_orig_distances,
+    adaptation_combined_distances,
+    min_size = 174,
+    verbose = FALSE
+  )
+)
+
+# MA vs salt MA
+resampled_ks$ma_salt = map_dfr(
+  c(1:100),
+  ~ resample_ks_test(
+    ma_orig_distances,
+    muts_line %>% filter(line == 5),
+    verbose = FALSE
+  )
+)
+
+# HS vs salt MA
+resampled_ks$hs_salt = map_dfr(
+  c(1:100),
+  ~ resample_ks_test(
+    adaptation_combined_distances,
+    muts_line %>% filter(line == 5),
+    verbose = FALSE
+  )
+)
+```
+
+Looking at the distribution of results:
+
+```{r}
+summary(resampled_ks$ma_hs %>% select(statistic, p.value))
+
+summary(resampled_ks$ma_salt %>% select(statistic, p.value))
+
+summary(resampled_ks$hs_salt %>% select(statistic, p.value))
+```
+
+
+
+
 # Final combined plot
 
 ```{r}
 final_distances = muts_line %>% 
   rename(site_type = line) %>% 
+  filter(site_type != '0') %>% 
   select(
     chromosome, position, mutant_sample,
     chrom_val, next_pos, d, site_type
   ) %>% 
   bind_rows(
     ma_orig_distances %>% mutate(site_type = 'ma'),
-    adaptation_silent, 
-    adaptation_nonsilent
+    adaptation_combined_distances %>% mutate(site_type = 'adaptation')
 ) %>% 
    mutate(
     site_type = case_when(
-      site_type == 'nonsilent' ~ 'HS lines (non-silent sites)',
-      site_type == 'silent' ~ 'HS lines (silent sites)',
+      site_type == 'adaptation' ~ 'HS',
       site_type == 'ma' ~ 'MA',
-      site_type == '0' ~ 'Salt MA (control)',
-      site_type == '5' ~ 'Salt MA (salt)'
+      site_type == '5' ~ 'Salt MA'
     )) %>% 
   mutate(
     site_type = fct_relevel(site_type, 
-      c('MA', 'HS lines (non-silent sites)', 'HS lines (silent sites)', 
-        'Salt MA (control)', 'Salt MA (salt)'))
+      c('MA', 'HS', 'Salt MA'))
   )
-  
 
-# final_distances = read_tsv(here('data/plots/fig_4a_distances.tsv'), col_types = cols())
+# final_distances = read_tsv(here('data/plots/intermutation_distances.tsv'), col_types = cols())
 
 distance_cdf_plot = final_distances %>% 
   ggplot(
@@ -373,7 +497,7 @@ distance_cdf_plot = final_distances %>%
     geom = 'line') +
   scale_color_manual(
     values = wes_palette(
-      7, name = 'Darjeeling1', type = 'continuous')[3:7]) +
+      5, name = 'Darjeeling1', type = 'continuous')[c(1, 3, 5)]) +
   labs(
     x = '',
     y = 'Cumulative density'
@@ -381,7 +505,7 @@ distance_cdf_plot = final_distances %>%
   # legend styling
   theme(
     legend.text = element_text(family = 'Helvetica', color = 'black', size = 10),
-    legend.position = c(0.2, 0.8),
+    legend.position = c(0.15, 0.8),
     legend.title = element_blank(),
     legend.box.background = element_blank(),
     legend.key = element_blank()
@@ -452,14 +576,14 @@ final_distances_density = bind_rows(
 ) %>% 
   arrange(site_type, bin)
 
-# write_tsv(final_distances, here('data/plots/fig_4a_distances.tsv'))
-# write_tsv(final_distances_density, here('data/plots/fig_4b_density.tsv'))
+# write_tsv(final_distances, here('data/plots/intermutation_distances.tsv'))
+# write_tsv(final_distances_density, here('data/plots/intermutation_density.tsv'))
 ```
   
 Density barplot:
 
 ```{r}
-# final_distances_density = read_tsv(here('data/plots/fig_4b_density.tsv'), col_types = cols())
+# final_distances_density = read_tsv(here('data/plots/intermutation_density.tsv'), col_types = cols())
 
 distance_density_plot = final_distances_density %>% 
   ggplot(
@@ -473,12 +597,11 @@ distance_density_plot = final_distances_density %>%
   guides(fill = FALSE) +
   scale_fill_manual(
     values = wes_palette(
-      7, name = 'Darjeeling1', type = 'continuous')[3:7]) +
+      5, name = 'Darjeeling1', type = 'continuous')[c(1, 3, 5)]) +
   labs(
     x = expression(
       paste('Intermutation distance (', log[10], ' bp)')),
-    y = 'Proportion',
-    tag = 'B'
+    y = 'Proportion'
   ) +
   # legend styling
   theme(
@@ -496,11 +619,124 @@ distance_density_plot
 Combining the two:
 
 ```{r}
-fig_4 = distance_cdf_plot + distance_density_plot +
-  plot_layout(nrow = 2, ncol = 1)
+combined_fig = distance_cdf_plot + distance_density_plot +
+  plot_layout(
+    nrow = 2, ncol = 1,
+    heights = c(3, 2)
+  )
 
-fig_4
+combined_fig
 
-ggsave(here('plots/fig_4.eps'), plot = fig_4)
+ggsave(here('plots/intermutation_distances.eps'), plot = combined_fig, width = 7.5, height = 5)
 ```
 
+# Mutation clusters
+
+```{r}
+final_distances %>% 
+  filter(site_type == 'HS lines') %>% 
+    # get mutations that are part of clusters
+  mutate(prev_pos = lag(position),
+         prev_d = abs(position - prev_pos),
+         prev_chrom = lag(chrom_val))
+  filter(d <= 10 | prev_d <= 10)
+```
+
+
+```{r}
+label_clusters = function(d) {
+  d_labelled = d %>% 
+    # get mutations that are part of clusters
+    mutate(prev_pos = lag(position),
+           prev_d = abs(position - prev_pos),
+           prev_chrom = lag(chrom_val)) %>% 
+    filter(d <= 10 | prev_d <= 10) %>% 
+    mutate(next_pos = lead(position),
+           prev_pos = lag(position)) %>%  # overwrite prev next_pos column
+    
+    # label clusters
+    mutate(prev_mut = ifelse(
+      abs(position - next_pos) > 10, TRUE, FALSE)) %>% 
+    mutate(prev_mut = ifelse(
+      abs(position - prev_pos) > 10, TRUE, FALSE) # gets 'right bound mut' for each cluster
+    ) %>% 
+    mutate(prev_mut = ifelse(is.na(prev_mut), FALSE, prev_mut)) %>% # just for first row
+    mutate(
+      cluster = cumsum(prev_mut) # uses bool var assigned above to assign clusters - increments at each TRUE
+    )
+  return(d_labelled)
+}
+```
+
+Creating a list of clusters:
+
+```{r}
+clusters = list()
+
+clusters = final_distances %>% 
+  split(.$site_type) %>% 
+  map(~ label_clusters(.))
+
+names(clusters) = c('ma', 'adaptation', 'salt_ma')
+
+```
+
+Getting the number of clusters for each:
+
+```{r}
+clusters %>% 
+  map(~ max(.$cluster))
+```
+
+Two proportions z-test:
+
+```{r}
+prop.test(
+  x = c(14, 154), 
+  n = c(nrow(adaptation_combined_distances), nrow(ma_orig_distances)))
+
+prop.test(
+  x = c(14, 3),
+  n = c(nrow(adaptation_combined_distances), nrow(final_distances %>% filter(site_type == 'Salt MA')))
+)
+```
+
+Getting the annotations of the HS clusters:
+
+```{r}
+clusters$adaptation %>% 
+  select(chromosome, position, cluster) %>% 
+  
+  left_join(adaptation, by = c('chromosome', 'position')) %>% 
+  
+  # clean up
+  select(chromosome, position, cluster, CDS, intronic:utr3) %>% 
+  
+  # sum annotations
+  group_by(cluster) %>% 
+  summarise(across(.cols = CDS:utr3, .fns = sum)) %>% 
+  
+  # transform
+  pivot_longer(cols = CDS:utr3, names_to = 'annotation') %>% 
+  filter(value != 0) %>% 
+  group_by(cluster, annotation) %>% # give each cluster a single annotation
+  count() %>% 
+  
+  # get final per-annotation counts
+  group_by(annotation) %>% 
+  count()
+```
+
+How many clusters are in candidate salt genes?
+
+```{r}
+clusters$adaptation %>% 
+  select(chromosome, position, cluster) %>% 
+  
+  left_join(adaptation, by = c('chromosome', 'position')) %>% 
+  select(chromosome, position, cluster, Gene.primaryIdentifier, contains('perrineau')) %>% 
+  
+  filter(perrineau == 1)
+
+# 3 of 14 clusters are in perrineau genes 
+```

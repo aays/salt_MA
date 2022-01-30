@@ -896,6 +896,19 @@ perrineau_cis$ma_orig = annotations_gene_sets %>%
 
 ```
 
+Write combined salt MA bit to file for supplemental:
+
+```{r}
+perrineau_salt_ma_only = props_perrineau$salt_ma %>% 
+  select(sample_factor, ant = annotation, prop) %>% 
+  left_join(
+    perrineau_cis$salt_ma, by = c('sample_factor', 'ant')
+  )
+
+# write_tsv(perrineau_salt_ma_only, here('data/supplemental/salt_ma_perrineau.tsv'))
+```
+
+
 Repeat for salt 0 and 5 combined:
 
 ```{r}
@@ -1430,11 +1443,13 @@ fig_2_all = ma_orig_final %>%
 
 ```{r}
 fig_2_all = read_tsv(here('data/plots/fig_2_all.tsv'), col_types = cols())
-palette = wes_palette(7, name = 'Darjeeling1', type = 'continuous')
+palette = wes_palette(5, name = 'Darjeeling1', type = 'continuous')
 
 annotation_plot_all = fig_2_all %>% 
   # set up data
   filter(gene_set != 'expressed genes', sample_factor != 'Salt MA (control)') %>% 
+  mutate(sample_factor = ifelse(sample_factor == 'Salt MA (salt)', 'Salt MA', sample_factor),
+         gene_set = ifelse(gene_set == 'salt genes', 'candidate salt genes', gene_set)) %>% 
   mutate(
     annotation = case_when(
       annotation == 'utr5' ~ "5' UTR",
@@ -1444,9 +1459,9 @@ annotation_plot_all = fig_2_all %>%
   ) %>% 
   mutate(
     sample_factor = fct_relevel(sample_factor, 
-      c('MA', 'HS', 'Salt MA (salt)')),
+      c('MA', 'HS', 'Salt MA')),
     gene_set = fct_relevel(
-      gene_set, c('genome wide', 'salt genes')),
+      gene_set, c('genome wide', 'candidate salt genes')),
     annotation = fct_relevel(
       annotation, c('intergenic', "5' UTR", 'CDS', 'intronic', "3' UTR")
     )
@@ -1476,10 +1491,10 @@ annotation_plot_all = fig_2_all %>%
   ) +
   scale_fill_manual(
     values = c(
-      'MA' = palette[3], # '#87C5FC', orig color
-      'HS' = palette[5], # '#FF5B5F', orig color
+      'MA' = palette[1], # '#87C5FC', orig color
+      'HS' = palette[3], # '#FF5B5F', orig color
       # 'Salt MA (control)' = palette[6], 
-      'Salt MA (salt)' = palette[7])
+      'Salt MA' = palette[5])
   ) +
   # macro elements
   guides(fill = guide_legend(
