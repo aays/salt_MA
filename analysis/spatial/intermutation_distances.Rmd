@@ -464,6 +464,8 @@ summary(resampled_ks$hs_salt %>% select(statistic, p.value))
 
 # Final combined plot
 
+Creating a downsampled dataset:
+
 ```{r}
 final_distances = muts_line %>% 
   rename(site_type = line) %>% 
@@ -489,7 +491,18 @@ final_distances = muts_line %>%
 
 # final_distances = read_tsv(here('data/plots/intermutation_distances.tsv'), col_types = cols())
 
-distance_cdf_plot = final_distances %>% 
+set.seed(42)
+downsample_size = nrow(muts_line %>% filter(line == 5))
+
+final_distances_downsampled = final_distances %>% 
+  split(.$site_type) %>% 
+  map_dfr(~ slice_sample(., n = downsample_size, replace = FALSE))
+```
+
+Plotting:
+
+```{r}
+distance_cdf_plot = final_distances_downsampled %>% 
   ggplot(
     aes(x = log10(d), color = site_type)) +
   stat_ecdf(
@@ -525,7 +538,7 @@ distance_cdf_plot
 Creating the density plot:
 
 ```{r}
-final_distances_density = final_distances %>% 
+final_distances_density = final_distances_downsampled %>% 
   mutate(
     log_d = log10(d),
     bin = floor(log_d / 0.5) * 0.5) %>% 
