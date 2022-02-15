@@ -139,12 +139,17 @@ Loading in resamples:
 
 ```{r}
 ma_resamples = read_tsv(
-  here('data/network/resamples/ma_resample_100.tsv'),
+  here('data/network/resamples/ma_resample_100_replacement.tsv'),
   col_types = cols()
 )
 
 all_resamples = read_tsv(
   here('data/network/resamples/chlamynet_full_resample_100_replacement.tsv'),
+  col_types = cols()
+)
+
+salt_ma_resamples = read_tsv(
+  here('data/network/resamples/saltMA_resample_100_replacement.tsv'),
   col_types = cols()
 )
 ```
@@ -287,7 +292,7 @@ Looking at distribution of MA resamples, stacked
 ```{r}
 # looking at distribution of MA resamples, stacked
 
-ggplot(all_resamples, aes(x = min_path)) +
+ggplot(ma_resamples, aes(x = min_path)) +
   geom_histogram(
     binwidth = 1,
     color = 'black',
@@ -303,8 +308,8 @@ palette = wes_palette('Darjeeling1', 5, 'continuous')
 
 resample_dist_plot = bind_rows(
   muts_all$adaptation %>% select(type, min_path = min_shortest_path) %>% mutate(type = 'HS genes'),
-  # ma_resamples %>% mutate(type = 'MA resamples') %>% select(type, min_path),
-  all_resamples %>% mutate(type = 'ChlamyNET resamples') %>% select(type, min_path)
+  ma_resamples %>% mutate(type = 'MA resamples') %>% select(type, min_path),
+  # ma_resamples %>% mutate(type = 'ChlamyNET resamples') %>% select(type, min_path)
 ) %>% 
   mutate(type = fct_relevel(type, c('HS genes', 'ChlamyNET resamples'))) %>% 
   
@@ -338,7 +343,7 @@ resample_dist_plot = bind_rows(
   scale_fill_manual(
     values = c(
       'HS genes' = palette[3],
-      'ChlamyNET resamples' = palette[2]
+      'MA resamples' = palette[2]
     )
   )
 
@@ -350,8 +355,8 @@ Redoing with position dodge:
 ```{r}
 bind_rows(
   muts_all$adaptation %>% select(type, min_path = min_shortest_path),
-  # ma_resamples %>% mutate(type = 'MA resamples') %>% select(type, min_path),
-  all_resamples %>% mutate(type = 'chlamynet resamples') %>% select(type, min_path)
+  ma_resamples %>% mutate(type = 'MA resamples') %>% select(type, min_path),
+  # all_resamples %>% mutate(type = 'chlamynet resamples') %>% select(type, min_path)
 ) %>% 
   
   # plot distributions
@@ -379,7 +384,7 @@ bind_rows(
 Looking at a handful of chlamynet resamples:
 
 ```{r}
-ggplot(all_resamples %>% filter(iteration < 21), aes(x = min_path)) +
+ggplot(ma_resamples %>% filter(iteration < 21), aes(x = min_path)) +
   geom_histogram(
     binwidth = 1,
     fill = 'steelblue',
@@ -402,12 +407,12 @@ adaptation_binned = muts_all$adaptation %>%
   group_by(min_path) %>% 
   summarise(adaptation_count = n())
 
-all_resamples_binned = all_resamples %>% 
+ma_resamples_binned = ma_resamples %>% 
   group_by(iteration, min_path) %>% 
   summarise(random_count = n(), .groups = 'drop')
 
 # get bin size 
-resample_residuals = all_resamples_binned %>% 
+resample_residuals = ma_resamples_binned %>% 
   
   # join adaptation dataset - replace NAs with 0s
   full_join(adaptation_binned, by = c('min_path')) %>% 
@@ -436,11 +441,11 @@ residual_plot = resample_residuals_summed %>%
     # aes(ymin = min_sq_diff, ymax = max_sq_diff, width = 0.4)
   # ) +
   scale_x_continuous(breaks = seq(0, 10, 1)) +
-  scale_y_continuous(breaks = seq(-500, 750, 250)) +
+  scale_y_continuous(breaks = seq(-2000, 1000, 500)) +
   theme_classic() +
   labs(
     x = 'Minimum shortest path', 
-    y = 'Random count - HS gene count',
+    y = 'Resample count - HS gene count',
     tag = 'B') +
   theme(
     axis.title = element_text(family = 'Helvetica', size = 12, color = 'black'),
@@ -460,5 +465,77 @@ network_fig = resample_dist_plot + residual_plot
 network_fig
 
 ggsave(here('plots/network.eps'), plot = network_fig, width = 6, height = 4)
+```
+
+# Comparing across multiple datasets
+
+## MA vs random
+
+
+```{r}
+all_resamples_combined = all_resamples %>% 
+  group_by(min_path) %>% 
+  summarise(random_count = n(), .groups = 'drop')
+
+ma_resamples_combined = ma_resamples %>% 
+  group_by(min_path) %>% 
+  summarise(random_count = n(), .groups = 'drop')
+
+bind_rows(
+  all_resamples_combined %>% mutate(type = 'all'),
+  ma_resamples_combined %>% mutate(type = 'ma')
+) %>% 
+ggplot(., aes(x = min_path, y = random_count, fill = type)) +
+  geom_bar(stat = 'identity') +
+  facet_wrap(~ type)
+  
+```
+
+Are they statistically different?
+
+```{r}
+wilcox.test(all_resamples$min_path, ma_resamples$min_path, alternative = 'two.sided')
+```
+
+## MA vs HS
+
+Testing individual MA resamples vs adaptation:
+
+```{r}
+wilcox.test(
+  ma_resamples %>% 
+    filter(iteration == 1) %>% 
+    select(min_path) %>% 
+    unlist(),
+  muts_all$adaptation$min_shortest_path
+)
+```
+
+```{r}
+indiv_test = function(ma, hs, iteration_value) {
+  wilcox.test(
+    ma %>% 
+      filter(iteration == iteration_value) %>% 
+      select(min_path) %>% 
+      unlist(),
+    hs$min_shortest_path,
+    alternative = 'two.sided'
+  ) %>% 
+    broom::tidy()
+}
+
+map_dfr(
+  c(1:100), ~ indiv_test(ma_resamples, muts_all$adaptation, .), .id = 'iteration'
+) %>% 
+  summary()
+```
+
+## HS vs Salt MA
+
+```{r}
+map_dfr(
+  c(1:100), ~ indiv_test(salt_ma_resamples, muts_all$adaptation, .), .id = 'iteration'
+) %>% 
+  summary()
 ```
 
