@@ -309,13 +309,14 @@ palette = wes_palette('Darjeeling1', 5, 'continuous')
 resample_dist_plot = bind_rows(
   muts_all$adaptation %>% select(type, min_path = min_shortest_path) %>% mutate(type = 'HS genes'),
   ma_resamples %>% mutate(type = 'MA resamples') %>% select(type, min_path),
-  # ma_resamples %>% mutate(type = 'ChlamyNET resamples') %>% select(type, min_path)
+  all_resamples %>% mutate(type = 'Random resamples') %>% select(type, min_path)
 ) %>% 
-  mutate(type = fct_relevel(type, c('HS genes', 'ChlamyNET resamples'))) %>% 
+  mutate(type = fct_relevel(type, c('Random resamples', 'MA resamples', 'HS genes'))) %>% 
   
   # plot distributions
   ggplot(aes(x = min_path - 1, fill = type)) +
   geom_histogram(
+    aes(y = ..density..),
     binwidth = 1,
     color = 'black'
   ) +
@@ -323,12 +324,11 @@ resample_dist_plot = bind_rows(
     x = c(0, 20)
   ) +
   facet_wrap(
-    ~ type, scales = 'free_y', 
-    nrow = 3, ncol = 1) +
+    ~ type, nrow = 3, ncol = 1) +
   theme_classic() +
   labs(
     x = 'Minimum shortest path', 
-    y = 'Count',
+    y = 'Proportion',
     tag = 'A') +
   theme(
     axis.title = element_text(family = 'Helvetica', size = 12, color = 'black'),
@@ -337,13 +337,14 @@ resample_dist_plot = bind_rows(
     plot.tag = element_text(family = 'Helvetica', size = 12, face = 'bold'),
     strip.background = element_blank()
   ) +
-  scale_x_continuous(breaks = seq(0, 14, 1), labels = seq(0, 14, 1)) +
+  scale_x_continuous(breaks = seq(0, 9, 1), labels = seq(0, 9, 1)) +
   coord_cartesian(x = c(0, 9)) +
   guides(fill = FALSE) +
   scale_fill_manual(
     values = c(
       'HS genes' = palette[3],
-      'MA resamples' = palette[2]
+      'MA resamples' = palette[1],
+      'Random resamples' = palette[2]
     )
   )
 
@@ -419,7 +420,7 @@ resample_residuals = ma_resamples_binned %>%
   replace_na(list(random_count = 0, adaptation_count = 0)) %>% 
   
   # get differences and return a sum for each iteration
-  mutate(sq_diff = (random_count - adaptation_count)) %>% 
+  mutate(sq_diff = (adaptation_count - random_count)) %>% 
   filter(!is.na(iteration))
 
 
@@ -441,11 +442,11 @@ residual_plot = resample_residuals_summed %>%
     # aes(ymin = min_sq_diff, ymax = max_sq_diff, width = 0.4)
   # ) +
   scale_x_continuous(breaks = seq(0, 10, 1)) +
-  scale_y_continuous(breaks = seq(-2000, 1000, 500)) +
+  scale_y_continuous(breaks = seq(-2000, 1500, 500)) +
   theme_classic() +
   labs(
     x = 'Minimum shortest path', 
-    y = 'Resample count - HS gene count',
+    y = 'HS gene count - resample count',
     tag = 'B') +
   theme(
     axis.title = element_text(family = 'Helvetica', size = 12, color = 'black'),
@@ -470,7 +471,6 @@ ggsave(here('plots/network.eps'), plot = network_fig, width = 6, height = 4)
 # Comparing across multiple datasets
 
 ## MA vs random
-
 
 ```{r}
 all_resamples_combined = all_resamples %>% 
@@ -535,6 +535,15 @@ map_dfr(
 ```{r}
 map_dfr(
   c(1:100), ~ indiv_test(salt_ma_resamples, muts_all$adaptation, .), .id = 'iteration'
+) %>% 
+  summary()
+```
+
+## HS vs random
+
+```{r}
+map_dfr(
+  c(1:100), ~ indiv_test(all_resamples, muts_all$adaptation, .), .id = 'iteration'
 ) %>% 
   summary()
 ```

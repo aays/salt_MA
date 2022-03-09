@@ -16,6 +16,23 @@ library(wesanderson)
 # Data import
 
 ```{r}
+# reduce fxn for MA
+# some SNMs are written as ACAGC>ACAAC
+# should be reduced to G>A
+reduce_nonref_snm = function(mut) {
+  # mut should be of the form XXXX>YYYY
+  # X and Y should be the same length
+  if (length(mut) == 3) {
+    return(mut)
+  }
+  strs = unlist(str_split(mut, pattern = '>'))
+  strs_split = strsplit(strs, split = '') # split into indiv characters
+  diff_idx = match(FALSE, strs_split[[1]] == strs_split[[2]]) # get idx at which chars don't match
+  new_mut = paste(strs_split[[1]][diff_idx], strs_split[[2]][diff_idx], sep = '>')
+  return(new_mut)
+}
+reduce_nonref_snm_vec = Vectorize(reduce_nonref_snm) # make fxn vectorized
+
 # all mut describer outputs
 salt <- read_tsv(
   here('data/rate/mut_describer/muts_described.final.gene_sets.tsv'), col_types = cols()) %>% 
@@ -28,7 +45,8 @@ ma <- read_tsv(
   col_types = cols(), na = c('.')
 ) %>% 
   select(-chromosome_1, -position_1) %>% 
-  filter(nchar(mutation) == 3) # remove indels
+  filter(type == 'SNP') %>% 
+  mutate(mutation = reduce_nonref_snm_vec(mutation))
 
 adaptation <- read_csv(
   here('data/prev/all_mutations_w_shared_hmmIBD_corrected_FPKM.csv'), 
@@ -188,8 +206,8 @@ get_counts = function(d) {
 count_table = list(
     # salt_nonsilent = salt %>% filter(nonsyn_v_syn != 'nonsynonymous'), 
     # salt_silent = salt %>% filter(nonsyn_v_syn == 'synonymous'),
-    salt_0 = salt %>% filter(sample_type == '0', mutant_sample != 'DL51_0'),
-    salt_5 = salt %>% filter(sample_type == '5', mutant_sample != 'DL51_5'),
+    salt_0 = salt %>% filter(sample_type == '0'),
+    salt_5 = salt %>% filter(sample_type == '5'),
     ma = ma, 
     adaptation = adaptation
     # adaptation_nonsilent = adaptation_silent_nonsilent %>% filter(site_type == 'nonsilent'),

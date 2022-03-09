@@ -697,6 +697,7 @@ names(clusters) = c('ma', 'adaptation', 'salt_ma')
 Getting the number of clusters for each:
 
 ```{r}
+# add 1! clusters are 0-indexed
 clusters %>% 
   map(~ max(.$cluster))
 ```
@@ -705,12 +706,17 @@ Two proportions z-test:
 
 ```{r}
 prop.test(
-  x = c(14, 154), 
+  x = c(15, 155), 
   n = c(nrow(adaptation_combined_distances), nrow(ma_orig_distances)))
 
 prop.test(
-  x = c(14, 3),
+  x = c(15, 4),
   n = c(nrow(adaptation_combined_distances), nrow(final_distances %>% filter(site_type == 'Salt MA')))
+)
+
+prop.test(
+  x = c(4, 155),
+  n = c(nrow(final_distances %>% filter(site_type == 'Salt MA')), nrow(ma_orig_distances))
 )
 ```
 
