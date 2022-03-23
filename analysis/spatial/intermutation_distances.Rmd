@@ -400,10 +400,25 @@ resample_ks_test = function(d1, d2, min_size = FALSE, verbose = TRUE) {
   if (verbose == TRUE) {
     message(paste('sampling down to', n_muts))
   }
-  d1_sampled = sample(d1$d, size = n_muts, replace = FALSE)
-  d2_sampled = sample(d2$d, size = n_muts, replace = FALSE)
+  d1_sampled = d1 %>% 
+    slice_sample(n = n_muts, replace = FALSE) %>% 
+    arrange(chrom_val, position) %>% 
+    distinct() %>% 
+    group_by(chromosome) %>% 
+    mutate(next_pos = lead(position), prev_pos = lag(position),
+           d = next_pos - position) %>% 
+    mutate(d = ifelse(is.na(d), position - prev_pos, d))
+  d2_sampled = d2 %>% 
+    slice_sample(n = n_muts, replace = FALSE) %>% 
+    arrange(chrom_val, position) %>% 
+    distinct() %>% 
+    group_by(chromosome) %>% 
+    mutate(next_pos = lead(position), prev_pos = lag(position),
+           d = next_pos - position) %>% 
+    mutate(d = ifelse(is.na(d), position - prev_pos, d))
+    
   out = broom::tidy(
-    suppressWarnings(ks.test(d1_sampled, d2_sampled))
+    suppressWarnings(ks.test(d1_sampled$d, d2_sampled$d))
   )
   return(out)
 }
@@ -467,7 +482,10 @@ summary(resampled_ks$hs_salt %>% select(statistic, p.value))
 Creating a downsampled dataset:
 
 ```{r}
-final_distances = muts_line %>% 
+set.seed(42)
+downsample_size = nrow(muts_line %>% filter(line == 5)) # 174
+
+final_distances_downsampled = muts_line %>% 
   rename(site_type = line) %>% 
   filter(site_type != '0') %>% 
   select(
@@ -475,8 +493,24 @@ final_distances = muts_line %>%
     chrom_val, next_pos, d, site_type
   ) %>% 
   bind_rows(
-    ma_orig_distances %>% mutate(site_type = 'ma'),
-    adaptation_combined_distances %>% mutate(site_type = 'adaptation')
+    ma_orig_distances %>% 
+      slice_sample(n = downsample_size, replace = FALSE) %>% 
+      arrange(chrom_val, position) %>% 
+      distinct() %>% 
+      group_by(chromosome) %>% 
+      mutate(next_pos = lead(position), prev_pos = lag(position),
+             d = next_pos - position) %>% 
+      mutate(d = ifelse(is.na(d), position - prev_pos, d)) %>% 
+      mutate(site_type = 'ma'),
+    adaptation_combined_distances %>% 
+      slice_sample(n = downsample_size, replace = FALSE) %>% 
+      arrange(chrom_val, position) %>% 
+      distinct() %>% 
+      group_by(chromosome) %>% 
+      mutate(next_pos = lead(position), prev_pos = lag(position),
+             d = next_pos - position) %>% 
+      mutate(d = ifelse(is.na(d), position - prev_pos, d)) %>% 
+      mutate(site_type = 'adaptation')
 ) %>% 
    mutate(
     site_type = case_when(
@@ -491,12 +525,10 @@ final_distances = muts_line %>%
 
 # final_distances = read_tsv(here('data/plots/intermutation_distances.tsv'), col_types = cols())
 
-set.seed(42)
-downsample_size = nrow(muts_line %>% filter(line == 5))
 
-final_distances_downsampled = final_distances %>% 
-  split(.$site_type) %>% 
-  map_dfr(~ slice_sample(., n = downsample_size, replace = FALSE))
+# final_distances_downsampled = final_distances %>% 
+#   split(.$site_type) %>% 
+#   map_dfr(~ slice_sample(., n = downsample_size, replace = FALSE))
 ```
 
 Plotting:
