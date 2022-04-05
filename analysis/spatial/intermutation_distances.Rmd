@@ -722,7 +722,9 @@ clusters = final_distances %>%
   split(.$site_type) %>% 
   map(~ label_clusters(.))
 
-names(clusters) = c('ma', 'adaptation', 'salt_ma')
+names(clusters) = c('adaptation', 'ma', 'salt_ma')
+
+clusters
 
 ```
 
