@@ -2,7 +2,7 @@
 
 See [here](https://github.com/saraelshawa/Network-Mutations) for other scripts.
 
-Scripts in this repo require the `networkx` Python package. This repo
+Scripts in this directory require the `networkx` Python package. This directory
 also contains scripts for a flux balance analysis using the _C. reinhardtii_
 metabolic network, but due to the extremely limited overlap between nodes in this
 network and genes mutated in our study it was ultimately omitted. 
@@ -13,6 +13,17 @@ Given a network in GML format, resamples nodes with replacement for a given
 number of times and returns all x all shortest paths between resampled nodes. 
 Can optionally take in a list of genes to sample from (default behaviour is to
 sample from full GML network). 
+
+Usage:
+
+```bash
+python shortest_path_resamples.py \
+--fname nodes.txt \ # optional - nodes to resample from - default is full network
+--treatment treatment_nodes.txt \ # list of treatment (HS) nodes, for resample size
+--gml ChlamyNET.gml \
+--replicates 100 \
+--out path/to/outfile
+```
 
 - `shortest_path.Rmd`
 
