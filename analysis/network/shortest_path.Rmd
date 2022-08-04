@@ -139,12 +139,17 @@ Loading in resamples:
 
 ```{r}
 ma_resamples = read_tsv(
-  here('data/network/resamples/ma_resample_100.tsv'),
+  here('data/network/resamples/ma_resample_100_replacement.tsv'),
   col_types = cols()
 )
 
 all_resamples = read_tsv(
   here('data/network/resamples/chlamynet_full_resample_100_replacement.tsv'),
+  col_types = cols()
+)
+
+salt_ma_resamples = read_tsv(
+  here('data/network/resamples/saltMA_resample_100_replacement.tsv'),
   col_types = cols()
 )
 ```
@@ -287,7 +292,7 @@ Looking at distribution of MA resamples, stacked
 ```{r}
 # looking at distribution of MA resamples, stacked
 
-ggplot(all_resamples, aes(x = min_path)) +
+ggplot(ma_resamples, aes(x = min_path)) +
   geom_histogram(
     binwidth = 1,
     color = 'black',
@@ -303,14 +308,15 @@ palette = wes_palette('Darjeeling1', 5, 'continuous')
 
 resample_dist_plot = bind_rows(
   muts_all$adaptation %>% select(type, min_path = min_shortest_path) %>% mutate(type = 'HS genes'),
-  # ma_resamples %>% mutate(type = 'MA resamples') %>% select(type, min_path),
-  all_resamples %>% mutate(type = 'ChlamyNET resamples') %>% select(type, min_path)
+  ma_resamples %>% mutate(type = 'MA resamples') %>% select(type, min_path),
+  all_resamples %>% mutate(type = 'Random resamples') %>% select(type, min_path)
 ) %>% 
-  mutate(type = fct_relevel(type, c('HS genes', 'ChlamyNET resamples'))) %>% 
+  mutate(type = fct_relevel(type, c('Random resamples', 'MA resamples', 'HS genes'))) %>% 
   
   # plot distributions
   ggplot(aes(x = min_path - 1, fill = type)) +
   geom_histogram(
+    aes(y = ..density..),
     binwidth = 1,
     color = 'black'
   ) +
@@ -318,12 +324,11 @@ resample_dist_plot = bind_rows(
     x = c(0, 20)
   ) +
   facet_wrap(
-    ~ type, scales = 'free_y', 
-    nrow = 3, ncol = 1) +
+    ~ type, nrow = 3, ncol = 1) +
   theme_classic() +
   labs(
     x = 'Minimum shortest path', 
-    y = 'Count',
+    y = 'Proportion',
     tag = 'A') +
   theme(
     axis.title = element_text(family = 'Helvetica', size = 12, color = 'black'),
@@ -332,13 +337,14 @@ resample_dist_plot = bind_rows(
     plot.tag = element_text(family = 'Helvetica', size = 12, face = 'bold'),
     strip.background = element_blank()
   ) +
-  scale_x_continuous(breaks = seq(0, 14, 1), labels = seq(0, 14, 1)) +
+  scale_x_continuous(breaks = seq(0, 9, 1), labels = seq(0, 9, 1)) +
   coord_cartesian(x = c(0, 9)) +
   guides(fill = FALSE) +
   scale_fill_manual(
     values = c(
       'HS genes' = palette[3],
-      'ChlamyNET resamples' = palette[2]
+      'MA resamples' = palette[1],
+      'Random resamples' = palette[2]
     )
   )
 
@@ -350,8 +356,8 @@ Redoing with position dodge:
 ```{r}
 bind_rows(
   muts_all$adaptation %>% select(type, min_path = min_shortest_path),
-  # ma_resamples %>% mutate(type = 'MA resamples') %>% select(type, min_path),
-  all_resamples %>% mutate(type = 'chlamynet resamples') %>% select(type, min_path)
+  ma_resamples %>% mutate(type = 'MA resamples') %>% select(type, min_path),
+  # all_resamples %>% mutate(type = 'chlamynet resamples') %>% select(type, min_path)
 ) %>% 
   
   # plot distributions
@@ -379,7 +385,7 @@ bind_rows(
 Looking at a handful of chlamynet resamples:
 
 ```{r}
-ggplot(all_resamples %>% filter(iteration < 21), aes(x = min_path)) +
+ggplot(ma_resamples %>% filter(iteration < 21), aes(x = min_path)) +
   geom_histogram(
     binwidth = 1,
     fill = 'steelblue',
@@ -402,19 +408,19 @@ adaptation_binned = muts_all$adaptation %>%
   group_by(min_path) %>% 
   summarise(adaptation_count = n())
 
-all_resamples_binned = all_resamples %>% 
+ma_resamples_binned = ma_resamples %>% 
   group_by(iteration, min_path) %>% 
   summarise(random_count = n(), .groups = 'drop')
 
 # get bin size 
-resample_residuals = all_resamples_binned %>% 
+resample_residuals = ma_resamples_binned %>% 
   
   # join adaptation dataset - replace NAs with 0s
   full_join(adaptation_binned, by = c('min_path')) %>% 
   replace_na(list(random_count = 0, adaptation_count = 0)) %>% 
   
   # get differences and return a sum for each iteration
-  mutate(sq_diff = (random_count - adaptation_count)) %>% 
+  mutate(sq_diff = (adaptation_count - random_count)) %>% 
   filter(!is.na(iteration))
 
 
@@ -436,11 +442,11 @@ residual_plot = resample_residuals_summed %>%
     # aes(ymin = min_sq_diff, ymax = max_sq_diff, width = 0.4)
   # ) +
   scale_x_continuous(breaks = seq(0, 10, 1)) +
-  scale_y_continuous(breaks = seq(-500, 750, 250)) +
+  scale_y_continuous(breaks = seq(-2000, 1500, 500)) +
   theme_classic() +
   labs(
     x = 'Minimum shortest path', 
-    y = 'Random count - HS gene count',
+    y = 'HS gene count - resample count',
     tag = 'B') +
   theme(
     axis.title = element_text(family = 'Helvetica', size = 12, color = 'black'),
@@ -460,5 +466,199 @@ network_fig = resample_dist_plot + residual_plot
 network_fig
 
 ggsave(here('plots/network.eps'), plot = network_fig, width = 6, height = 4)
+```
+
+# Comparing across multiple datasets
+
+## MA vs random
+
+```{r}
+all_resamples_combined = all_resamples %>% 
+  group_by(min_path) %>% 
+  summarise(random_count = n(), .groups = 'drop')
+
+ma_resamples_combined = ma_resamples %>% 
+  group_by(min_path) %>% 
+  summarise(random_count = n(), .groups = 'drop')
+
+bind_rows(
+  all_resamples_combined %>% mutate(type = 'all'),
+  ma_resamples_combined %>% mutate(type = 'ma')
+) %>% 
+ggplot(., aes(x = min_path, y = random_count, fill = type)) +
+  geom_bar(stat = 'identity') +
+  facet_wrap(~ type)
+  
+```
+
+Are they statistically different?
+
+```{r}
+wilcox.test(all_resamples$min_path, ma_resamples$min_path, alternative = 'two.sided')
+```
+
+## MA vs HS
+
+Testing individual MA resamples vs adaptation:
+
+```{r}
+wilcox.test(
+  ma_resamples %>% 
+    filter(iteration == 1) %>% 
+    select(min_path) %>% 
+    unlist(),
+  muts_all$adaptation$min_shortest_path
+)
+```
+
+```{r}
+indiv_test = function(ma, hs, iteration_value) {
+  wilcox.test(
+    ma %>% 
+      filter(iteration == iteration_value) %>% 
+      select(min_path) %>% 
+      unlist(),
+    hs$min_shortest_path,
+    alternative = 'two.sided'
+  ) %>% 
+    broom::tidy()
+}
+
+map_dfr(
+  c(1:100), ~ indiv_test(ma_resamples, muts_all$adaptation, .), .id = 'iteration'
+) %>% 
+  summary()
+```
+
+## HS vs Salt MA
+
+```{r}
+map_dfr(
+  c(1:100), ~ indiv_test(salt_ma_resamples, muts_all$adaptation, .), .id = 'iteration'
+) %>% 
+  summary()
+```
+
+## HS vs random
+
+```{r}
+map_dfr(
+  c(1:100), ~ indiv_test(all_resamples, muts_all$adaptation, .), .id = 'iteration'
+) %>% 
+  summary()
+```
+
+# Checking clusters
+
+Nabbed `chlamynet_data.tsv` from https://github.com/fran-romero-campero/ChlamyNET/tree/master/data
+
+```{r}
+exp_matrix = read_tsv(
+  here('data/network/chlamynet_data.tsv'),
+  col_types = cols()) %>% 
+  mutate(
+    color = case_when(
+      color == '#ff0000' ~ 'red',
+      color == '#0000ff' ~ 'blue',
+      color == '#009900' ~ 'green',
+      color == '#cc00cc' ~ 'purple',
+      color == '#ffff00' ~ 'yellow',
+      color == '#ff6600' ~ 'orange',
+      color == '#00ffff' ~ 'cyan',
+      color == '#ffcc00' ~ 'brown',
+      color == '#666600' ~ 'dark green'
+    ),
+    cluster = case_when(
+      color == 'red' ~ 'macromolecule synthesis',
+      color == 'blue' ~ 'carbon/nitrogen metabolism',
+      color == 'green' ~ 'protein assembly/degradation',
+      color == 'purple' ~ 'translation + lipid metabolism',
+      color == 'yellow' ~ 'chromatin organization',
+      color == 'orange' ~ 'GTPase activity + autophagy',
+      color == 'cyan' ~ 'photosynthesis',
+      color == 'brown' ~ 'DNA replication + cell cycle regulation',
+      color == 'dark green' ~ 'stress response + protein folding'
+    )    
+  )
+
+hs_genes = unique(adaptation$gene2)
+```
+
+Pare down exp matrix for HS genes:
+
+```{r}
+exp_filt = exp_matrix %>% 
+  filter(name %in% hs_genes)
+
+exp_filt
+
+# which clusters have the most genes?
+exp_filt %>% 
+  count(cluster) %>% 
+  arrange(desc(n))
+
+exp_dict = exp_filt %>% 
+  select(gene = name, cluster) # lookup for joins
+```
+
+For each gene in the HS - how many of its nearest genes (ie shortest path 1) are in each cluster? 
+
+Let's start with a simpler 'number of path length 1 genes in same cluster vs different cluster' 
+
+```{r}
+adaptation_cluster_named = adaptation %>% 
+  filter(shortest_path == 2) %>%  # shortest paths are '1 indexed' - so 2 is path length 1
+  left_join(
+    exp_dict %>% rename(gene1 = gene)
+  ) %>% 
+  rename(gene1_cluster = cluster) %>% 
+  left_join(
+    exp_dict %>% rename(gene2 = gene)
+  ) %>% 
+  rename(gene2_cluster = cluster) %>% 
+  select(contains('gene'))
+
+adaptation_cluster_named
+```
+
+Looking at the number of times the clusters were the same/different:
+
+```{r}
+adaptation_cluster_named %>% 
+  mutate(clusters_similar = ifelse(gene1_cluster == gene2_cluster, TRUE, FALSE)) %>% 
+  count(clusters_similar) # mostly the same! 
+
+# which are the same? which aren't?
+adaptation_cluster_named %>% 
+  mutate(clusters_similar = ifelse(gene1_cluster == gene2_cluster, TRUE, FALSE)) %>% 
+  select(gene1_cluster:clusters_similar) %>%
+  group_by(gene1_cluster, gene2_cluster, clusters_similar) %>% 
+  count() %>% 
+  arrange(desc(n))
+```
+
+Which genes have no annotated function?
+
+```{r}
+exp_filt %>% 
+  select(gene = name, description, cluster, clustering) %>% 
+  arrange(cluster)
+
+adaptation %>% 
+  filter(shortest_path == 2) %>%  # shortest paths are '1 indexed' - so 2 is path length 1
+  left_join(
+    exp_filt %>% select(gene1 = name, desc1 = description, gene1_cluster = cluster),
+    by = 'gene1'
+  ) %>% 
+  left_join(
+    exp_filt %>% select(gene2 = name, desc2 = description, gene2_cluster = cluster),
+    by = 'gene2'
+  ) %>% 
+  select(
+    gene1, gene2, desc1, desc2, gene1_cluster, gene2_cluster,
+    -shortest_path, -actual_path, -type) %>% 
+  View()
+
+
 ```
 

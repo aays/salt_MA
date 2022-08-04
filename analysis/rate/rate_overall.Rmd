@@ -15,6 +15,8 @@ library(wesanderson)
 
 # Data import
 
+Salt MA: 
+
 ```{r}
 snp_rate = read_tsv(
   here('data/rate/saltMA_SNM_rate_final.tsv'), 
@@ -45,7 +47,7 @@ indel_rate = read_tsv(
   filter(sample_type == '5')
 
 salt_all = bind_rows( # combined mutations, SNM + indel
-  snp_rate, indel_rate
+  snp_rate, indel_rate # remove either from this line to get the individual mut rate below
 ) %>% 
   select(-type, -mut_rate) %>% 
   group_by(sample, chrom) %>% 
@@ -74,7 +76,7 @@ all_callables = read_tsv(
     sample_type = str_extract(sample, '[05]$'),
     sample_factor = paste(sample_group, sample_type, sep = '_')
   ) %>% 
-  filter(sample_type == '5') %>% 
+  filter(sample_type == '5') %>% # keep only 5
   anti_join(salt_rate_lookup, by = c('sample', 'chrom')) %>% 
   left_join(generation_lookup, by = c('sample')) %>% 
   # reorder
@@ -87,6 +89,26 @@ salt_rate = bind_rows(
   arrange(sample, chrom) %>% 
   ungroup()
 ```
+
+Adaptation indels:
+
+```{r}
+hs_indels = read_tsv(
+  here('data/rate/adaptation_indel_rate_final.tsv'),
+  col_types = cols()
+)
+
+# overall indel rate
+hs_indels %>% 
+  summarise(
+    mutations = sum(mutations),
+    total_callable_sites = sum(total_callable_sites)
+  ) %>% 
+  mutate(
+    mut_rate = mutations / (total_callable_sites * 150)
+  )
+```
+
 
 # Rate values
 
@@ -167,12 +189,309 @@ salt_rate %>%
 # TODO: generate poisson CIs
 ```
 
+## Comparing relative indel rates across datasets
+
+```{r}
+# read in mut describer files
+muts_annotated = list()
+muts_annotated$salt_ma = bind_rows(
+  # SNP file
+  read_tsv(
+    here('data/rate/mut_describer/muts_described.final.gene_sets.tsv'),
+    col_types = cols()
+  ) %>% 
+    filter(str_extract(mutant_sample, '[05]$') == 5) %>% 
+    select(-rho, -mut_codon),
+  # indel file
+  read_tsv(
+    here('data/rate/mut_describer/indels_described.gene_sets.tsv'),
+    col_types = cols()
+  ) %>% 
+    filter(str_extract(mutant_sample, '[05]$') == 5) %>% 
+    select(-rho, -mut_codon) %>% 
+    mutate(type = 'indel')
+)
+
+muts_annotated$hs = read_tsv(
+  here('data/rate/mut_describer/adaptation.gene_sets.filtered.tsv'),
+  col_types = cols()
+)
+
+muts_annotated$ma = read_tsv(
+  here('data/rate/mut_describer/ma.gene_sets.tsv'),
+  col_types = cols()
+)
+```
+
+What are the relative rates of indels overall across the three datasets?
+
+```{r}
+muts_annotated %>% 
+  map_dfr(
+    ~ count(., type),
+    .id = 'set'
+  ) %>% 
+  group_by(set) %>% 
+  mutate(
+    total = sum(n),
+    prop = n / total) %>% 
+  
+  ggplot(., aes(x = set, y = prop, fill = type)) +
+  geom_bar(stat = 'identity', position = 'dodge', color = 'black') +
+  theme_classic() +
+  scale_fill_brewer(palette = 'Blues') +
+  coord_cartesian(y = c(0, 1)) +
+  ggtitle('overall fraction of indels')
+```
+
+What does this look like in intergenic regions?
+
+```{r}
+muts_annotated %>% 
+  map_dfr(
+    ~ filter(., intergenic == 1) %>% 
+      count(type),
+    .id = 'set'
+  ) %>% 
+  group_by(set) %>% 
+  mutate(
+    total = sum(n),
+    prop = n / total) %>% 
+  
+  ggplot(., aes(x = set, y = prop, fill = type)) +
+  geom_bar(stat = 'identity', position = 'dodge', color = 'black') +
+  theme_classic() +
+  scale_fill_brewer(palette = 'Blues') +
+  coord_cartesian(y = c(0, 1)) +
+  ggtitle('fraction of indels in intergenic regions')
+```
+
+What about introns? 
+
+```{r}
+muts_annotated %>% 
+  map_dfr(
+    ~ filter(., intronic == 1) %>% 
+      count(type),
+    .id = 'set'
+  ) %>% 
+  group_by(set) %>% 
+  mutate(
+    total = sum(n),
+    prop = n / total) %>% 
+  
+  ggplot(., aes(x = set, y = prop, fill = type)) +
+  geom_bar(stat = 'identity', position = 'dodge', color = 'black') +
+  theme_classic() +
+  scale_fill_brewer(palette = 'Blues') +
+  coord_cartesian(y = c(0, 1)) +
+  ggtitle('fraction of indels in intronic regions')
+```
+
+Redoing across all annotations:
+
+```{r}
+muts_annotation_split = list()
+
+annotations = c('genic', 'intronic', 'intergenic', 'utr5', 'utr3', 'CDS')
+names(annotations) = annotations # needed for map_dfr below
+
+# repeat over annotations for all three datasets
+for (current_set in c('salt_ma', 'hs', 'ma')) {
+  muts_annotation_split[[current_set]] = map_dfr(
+    annotations,
+    ~ filter(muts_annotated[[current_set]], !!sym(.) == 1) %>% 
+      count(type),
+    .id = 'annotation'
+  ) %>% 
+    mutate(set = current_set) %>% 
+    select(set, annotation, type, n) %>% 
+    group_by(annotation) %>% 
+    mutate(
+      total = sum(n),
+      prop = n / total
+    )
+}
+
+# plot 
+muts_annotation_split %>% 
+  bind_rows() %>% 
+  mutate(type = fct_relevel(type, levels = c('SNP', 'indel'))) %>% 
+  ggplot(., aes(x = set, y = prop, fill = type)) +
+  geom_bar(stat = 'identity', position = 'dodge', color = 'black') +
+  theme_classic() +
+  scale_fill_brewer(palette = 'Blues') +
+  coord_cartesian(y = c(0, 1)) +
+  facet_wrap(~ annotation)
 
 
+```
 
+## Comparing absolute indel rates
 
+This requires getting callables as well: 
 
+```{r}
+# code adapted from annotations.Rmd
+callables = list()
 
+# saltMA callables datasets
+callables$salt_ma = read_tsv(
+  here('data/rate/annotation_callables_samples.tsv'),
+  col_types = cols()
+) %>% 
+  mutate(
+    sample_group = str_extract(sample, '^[A-Z]{2}'),
+    sample_type = str_extract(sample, '[05]$'),
+    sample_factor = paste(sample_group, sample_type, sep = '_')) %>% 
+  filter(
+    sample_type == 5) %>% 
+  group_by(annotation) %>% 
+  summarise(
+    callable_total = sum(callable_total),
+    genome_count = max(genome_count),
+    .groups = 'drop'
+  ) %>% 
+  mutate(callable_total = callable_total * 236)
+
+# original MA callables
+callables$ma = read_csv(
+  here('data/prev/annotation.csv'),
+  col_types = cols()
+) %>% 
+  janitor::clean_names() %>% 
+  select(-type, -count) %>% 
+  distinct() %>% 
+  rename(
+    annotation = category,
+    callable_total = total_callable) %>% 
+  mutate(callable_total = callable_total * 940)
+  
+# adaptation callables
+callables$hs = read_csv(
+  here('data/rate/adaptation_callables.csv'),
+  col_types = cols()
+) %>% 
+  # cleanup
+  janitor::clean_names() %>% 
+  select(-x1) %>% 
+  # transform
+  pivot_longer(
+    cds:intronic,
+    names_to = 'annotation',
+    values_to = 'callables'
+  ) %>% 
+  mutate(annotation = ifelse(
+    annotation == 'cds', 'CDS', annotation)) %>% 
+  group_by(annotation) %>% 
+  summarise(callable_total = sum(callables)) %>% 
+  mutate(callable_total = callable_total * 150)
+```
+
+And now to redo the plot above, but with absolute rates instead:
+
+```{r}
+muts_annotation_absolute = list()
+
+annotations = c('genic', 'intronic', 'intergenic', 'utr5', 'utr3', 'CDS')
+names(annotations) = annotations # needed for map_dfr below
+
+# repeat over annotations for all three datasets
+for (current_set in c('salt_ma', 'hs', 'ma')) {
+  muts_annotation_absolute[[current_set]] = map_dfr(
+    annotations,
+    function(ant) {
+      filter(muts_annotated[[current_set]], !!sym(ant) == 1) %>% 
+        count(type) %>% 
+        mutate(annotation = ant, set = current_set) %>% 
+        inner_join(callables[[current_set]], by = 'annotation') %>% 
+        mutate(rate = n / callable_total) %>% 
+        select(set, annotation, type, n, rate)
+      }
+  )
+}
+
+muts_annotation_absolute
+
+# plot 
+muts_annotation_absolute %>% 
+  bind_rows() %>% 
+  filter(type == 'indel') %>% 
+  # mutate(type = fct_relevel(type, levels = c('SNP', 'indel'))) %>% 
+  ggplot(., aes(x = set, y = rate, fill = type)) +
+  geom_bar(stat = 'identity', position = 'dodge', color = 'black') +
+  theme_classic() +
+  scale_fill_brewer(palette = 'Blues') +
+  facet_wrap(~ annotation)
+```
+
+Zeroing in on the genic/intergenic side of things:
+
+```{r}
+palette = wes_palette(7, name = 'Darjeeling1', type = 'continuous')
+
+indel_plot = muts_annotation_absolute %>% 
+  bind_rows() %>% 
+  filter(type == 'indel', annotation %in% c('genic', 'intergenic')) %>% 
+  # mutate(type = fct_relevel(type, levels = c('SNP', 'indel'))) %>% 
+  mutate(set = case_when(
+    set == 'ma' ~ 'MA',
+    set == 'hs' ~ 'HS',
+    set == 'salt_ma' ~ 'Salt MA'
+  ),
+  annotation = case_when(
+    annotation == 'genic' ~ 'genic sites',
+    annotation == 'intergenic' ~ 'intergenic sites'
+  )) %>% 
+  mutate(
+    set = fct_relevel(
+      set, levels = c('MA', 'HS', 'Salt MA')),
+    annotation = fct_relevel(
+      annotation, levels = c('intergenic sites', 'genic sites')
+    )) %>% 
+  
+  ggplot(., aes(x = set, y = rate, fill = set)) +
+  geom_bar(stat = 'identity', position = 'dodge', color = 'black') +
+  theme_minimal() +
+  facet_wrap(~ annotation) +
+  guides(fill = FALSE) +
+  labs(
+    x = '',
+    y = 'Indel rate (per site-generation)'
+  ) +
+  scale_fill_manual(
+    values = palette[c(1, 5, 7)]
+  ) +
+  scale_y_continuous(
+    breaks = c(
+      0, 2e-10, 4e-10, 6e-10, 8e-10, 1e-9
+    ),
+    labels = c(
+      0,
+      expression(2 %*% 10^-10),
+      expression(4 %*% 10^-10),
+      expression(6 %*% 10^-10),
+      expression(8 %*% 10^-10),
+      expression(1 %*% 10^-9)
+    )
+  ) +
+  theme(
+    panel.border = element_rect(colour = 'black', size = 0.5, fill = NA),
+    panel.background = element_blank(),
+    strip.background = element_blank(),
+    axis.ticks = element_line(colour = 'black', size = 0.5),
+    panel.grid = element_blank()
+  ) +
+  theme(
+    axis.text = element_text(size = 10, colour = 'black'),
+    axis.title = element_text(size = 10, colour = 'black'),
+    strip.text = element_text(size = 10, colour = 'black')
+  )
+
+indel_plot
+
+ggsave(here('plots/indel_rate.eps'), plot = indel_plot, width = 6, height = 2.8)
+```
 
 
 

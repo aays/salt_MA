@@ -16,6 +16,23 @@ library(wesanderson)
 # Data import
 
 ```{r}
+# reduce fxn for MA
+# some SNMs are written as ACAGC>ACAAC
+# should be reduced to G>A
+reduce_nonref_snm = function(mut) {
+  # mut should be of the form XXXX>YYYY
+  # X and Y should be the same length
+  if (length(mut) == 3) {
+    return(mut)
+  }
+  strs = unlist(str_split(mut, pattern = '>'))
+  strs_split = strsplit(strs, split = '') # split into indiv characters
+  diff_idx = match(FALSE, strs_split[[1]] == strs_split[[2]]) # get idx at which chars don't match
+  new_mut = paste(strs_split[[1]][diff_idx], strs_split[[2]][diff_idx], sep = '>')
+  return(new_mut)
+}
+reduce_nonref_snm_vec = Vectorize(reduce_nonref_snm) # make fxn vectorized
+
 # all mut describer outputs
 salt <- read_tsv(
   here('data/rate/mut_describer/muts_described.final.gene_sets.tsv'), col_types = cols()) %>% 
@@ -28,7 +45,8 @@ ma <- read_tsv(
   col_types = cols(), na = c('.')
 ) %>% 
   select(-chromosome_1, -position_1) %>% 
-  filter(nchar(mutation) == 3) # remove indels
+  filter(type == 'SNP') %>% 
+  mutate(mutation = reduce_nonref_snm_vec(mutation))
 
 adaptation <- read_csv(
   here('data/prev/all_mutations_w_shared_hmmIBD_corrected_FPKM.csv'), 
@@ -188,8 +206,8 @@ get_counts = function(d) {
 count_table = list(
     # salt_nonsilent = salt %>% filter(nonsyn_v_syn != 'nonsynonymous'), 
     # salt_silent = salt %>% filter(nonsyn_v_syn == 'synonymous'),
-    salt_0 = salt %>% filter(sample_type == '0', mutant_sample != 'DL51_0'),
-    salt_5 = salt %>% filter(sample_type == '5', mutant_sample != 'DL51_5'),
+    salt_0 = salt %>% filter(sample_type == '0'),
+    salt_5 = salt %>% filter(sample_type == '5'),
     ma = ma, 
     adaptation = adaptation
     # adaptation_nonsilent = adaptation_silent_nonsilent %>% filter(site_type == 'nonsilent'),
@@ -774,7 +792,7 @@ rate_summarised_combined_clean = rate_summarised_combined %>%
   select(
     sample_factor, type, base, rate, conf.low, conf.high
   ) %>% 
-  group_by(sample_factor, base) %>% 
+  group_by(sample_factor) %>% 
   mutate(
     across(
       where(is.numeric), .fns = ~ . / mean(.),
@@ -815,7 +833,7 @@ spectrum_rate_plot_relative = ggplot(rate_summarised_combined_clean, aes(fill = 
   ) +
   scale_fill_manual(values = wes_palette(5, name = 'Darjeeling1', type = 'continuous')[c(1, 3, 5)]) +
   coord_cartesian(
-    y = c(0, 2)
+    y = c(0, 2.5)
   ) +
   geom_hline(yintercept = 1, linetype = 'dashed') +
   guides(fill = guide_legend(nrow = 1, ncol = 3)) +
@@ -1194,4 +1212,67 @@ count_table %>%
   filter(type == 'C>T') %>% 
   mutate(CT_prop = count / total)
 ```
+
+# Fraction of mutations at AT sites vs GC sites
+
+Modifying the `get_eq_gc` function from earlier for this:
+
+```{r}
+mut_frac = function(d) {
+  num_GC = 68891655
+  num_AT = 38724292
+  at_mutations = c('A>G', 'A>C', 'T>G', 'T>C', 'A>T', 'T>A')
+  gc_mutations = c('G>A', 'G>T', 'C>A', 'C>T', 'G>C', 'C>G')
+  
+  n_at = d %>% 
+    filter(mutation %in% at_mutations) %>% 
+    nrow()
+  
+  n_gc = d %>% 
+    filter(mutation %in% gc_mutations) %>% 
+    nrow()
+  
+  return(c(
+    'n_at' = n_at,
+    'n_gc' = n_gc,
+    'num_AT' = num_AT,
+    'num_GC' = num_GC))
+}
+```
+
+Getting rate of AT muts and GC muts for all three datasets:
+
+```{r}
+rates = list('ma' = ma, 'hs' = adaptation, 'salt' = salt %>% filter(sample_type == 5)) %>% 
+  map(.,
+    function(d) {
+      values = mut_frac(d)
+      rates = numeric()
+      rates['at'] = values['n_at'] / values['num_AT'] # mut rate @ AT sites
+      rates['gc'] = values['n_gc'] / values['num_GC'] # mut rate @ GC sites
+      return(rates)
+    }
+    )
+
+rates
+```
+
+Getting fold changes:
+
+```{r}
+# frac of muts at AT sites in HS vs MA
+(rates$hs['at'] / sum(rates$hs)) / (rates$ma['at'] / sum(rates$ma)) # 0.56
+
+# frac of AT muts in MA vs salt MA
+(rates$salt['at'] / sum(rates$salt)) / (rates$ma['at'] / sum(rates$ma)) # 1.75
+
+# repeating for GC
+# frac of muts at AT sites in HS vs MA
+(rates$hs['gc'] / sum(rates$hs)) / (rates$ma['gc'] / sum(rates$ma)) # 0.69
+
+# frac of AT muts in MA vs salt MA
+(rates$salt['gc'] / sum(rates$salt)) / (rates$ma['gc'] / sum(rates$ma)) # 0.69
+
+```
+
 
