@@ -21,12 +21,15 @@ def args():
         type=str, help='Network in gml format')
     parser.add_argument('-r', '--replicates', required=True,
         type=int, help='Number of replicates')
+    parser.add_argument('--no_replacement', required=False, action='store_true', 
+        help='Resample without replacement (default: with) [optional]')
     parser.add_argument('-o', '--out', required=True,
         type=str, help='File to write to')
 
     args = parser.parse_args()
 
-    return args.fname, args.treatment, args.gml, args.replicates, args.out
+    return args.fname, args.treatment, args.gml, \
+        args.replicates, args.no_replacement, args.out
 
 
 def parse_gene_lists(fname, treatment, G):
@@ -45,7 +48,7 @@ def parse_gene_lists(fname, treatment, G):
     -------
     list(treatment_genes) : list
         list of non-unique genes from treatment fname
-    list(set(ma_genes)) : list
+    list(set(gene_sample_set)) : list
         list of unique genes to resample from
     """
  
@@ -60,30 +63,33 @@ def parse_gene_lists(fname, treatment, G):
     # get genes to sample from if provided
     if fname:
         with open(fname, 'r') as f:
-            ma_genes = [line.rstrip('\n') for line in f]
+            gene_sample_set = [line.rstrip('\n') for line in f]
         
-        # filter ma genes
-        ma_genes = [
-            gene for gene in ma_genes
+        # only keep genes actually in network
+        gene_sample_set = [
+            gene for gene in gene_sample_set
             if gene in G]
     elif not fname:
-        ma_genes = list(G.nodes)
+        gene_sample_set = list(G.nodes)
 
-    print(f'[saltMA] resampling {len(treatment_genes)} nodes from {len(ma_genes)} total genes')
+    print(
+        f'[saltMA] resampling {len(treatment_genes)} nodes from {len(gene_sample_set)} total genes')
 
-    return list(treatment_genes), list(set(ma_genes))
+    return list(treatment_genes), list(set(gene_sample_set))
 
-def resample_nodes(G, ma_genes, replicate_size, iteration):
+def resample_nodes(G, gene_sample_set, replicate_size, no_replacement, iteration):
     """For a given iteration, resample nodes and get min path per node
 
     Parameters
     ----------
     G : networkx.classes.graph.Graph
         network to sample from
-    ma_genes : str
-        path to gene list to sample from
+    gene_sample_set : list
+        set of genes to sample from
     replicate_size : int
         number of nodes to draw
+    no_replacement : bool
+        if True, sample nodes without replacement (default: with replacement)
     iteration : int
         iteration count
 
@@ -99,13 +105,16 @@ def resample_nodes(G, ma_genes, replicate_size, iteration):
         the path to sample_closest_gene, provided for reference
     """
     # sample nodes
-    # subsampled_nodes = random.sample(ma_genes, replicate_size)
-    subsampled_nodes = random.choices(ma_genes, k=replicate_size)
+    if no_replacement:
+        subsampled_nodes = random.sample(gene_sample_set, replicate_size)
+    elif not no_replacement:
+        subsampled_nodes = random.choices(gene_sample_set, k=replicate_size)
 
     # get shortest paths
     for i, gene1 in tqdm(enumerate(subsampled_nodes), desc='finding min shortest paths'):
         if subsampled_nodes.count(gene1) > 1:
             # shortest path will always be itself if node is 'mutated' multiple times
+            # will never execute if run in --no_replacement mode
             shortest_path_dict = {gene1: [gene1]}
         elif subsampled_nodes.count(gene1) == 1:
             shortest_path_dict = {
@@ -126,7 +135,7 @@ def resample_nodes(G, ma_genes, replicate_size, iteration):
         yield gene1, sample_closest_gene, min_shortest_path, sample_shortest_path
 
 
-def perform_draws(fname, treatment, gml, replicates, out):
+def perform_draws(fname, treatment, gml, replicates, no_replacement, out):
     """Draw m nodes from network n times and calculate min paths
 
     Parameters
@@ -139,6 +148,8 @@ def perform_draws(fname, treatment, gml, replicates, out):
         path to network file (gml)
     replicates : int
         number of iterations n
+    no_replacement : bool
+        whether to sample without replacement (default: with)
     out : str
         file to write to
 
@@ -154,7 +165,7 @@ def perform_draws(fname, treatment, gml, replicates, out):
     print('[saltMA] parsing gene lists')
     if not fname:
         print('[saltMA] no gene list provided - resampling from full network')
-    treatment_genes, ma_genes = parse_gene_lists(fname, treatment, G)
+    treatment_genes, gene_sample_set = parse_gene_lists(fname, treatment, G)
     replicate_size = len(treatment_genes)
     print(f'[saltMA] will be resampling {replicate_size} genes {replicates} times')
 
@@ -168,7 +179,8 @@ def perform_draws(fname, treatment, gml, replicates, out):
         for iteration in tqdm(range(replicates)):
             i = iteration + 1 # start counting at 1
 
-            iterator = resample_nodes(G, ma_genes, replicate_size, i)
+            iterator = resample_nodes(
+                G, gene_sample_set, replicate_size, no_replacement, i)
             for gene1, gene2, min_path, sample_path in iterator:
                 out_dict = {
                     'iteration': i,
@@ -181,7 +193,7 @@ def perform_draws(fname, treatment, gml, replicates, out):
 
                 
 def main():
-    fname, treatment, gml, replicates, out = args()
+    fname, treatment, gml, replicates, no_replacement, out = args()
     perform_draws(*args())
 
 if __name__ == '__main__':
